@@ -73,7 +73,7 @@ let
           repo_root="$(git rev-parse --show-toplevel)"
           cd "$repo_root"
 
-          mapfile -d '' staged_paths < <(git diff --cached --name-only --diff-filter=ACMR -z)
+          mapfile -d $'\0' staged_paths < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
           if command -v ${maintenance.name} >/dev/null 2>&1; then
             ${maintenance.name} ${hookArgs}
