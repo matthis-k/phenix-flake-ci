@@ -107,8 +107,12 @@ let
       ${
         if maintenance.gitHooks.enabled then
           ''
-            if [[ -n "$current_hooks_path" && "$current_hooks_path" != "$phenix_hooks_dir" ]]; then
-              git config --local phenix-flake-ci.previousHooksPath "$current_hooks_path"
+            if [[ "$current_hooks_path" != "$phenix_hooks_dir" ]]; then
+              if [[ -n "$current_hooks_path" ]]; then
+                git config --local phenix-flake-ci.previousHooksPath "$current_hooks_path"
+              else
+                git config --local --unset-all phenix-flake-ci.previousHooksPath || true
+              fi
             fi
 
             mkdir -p "$phenix_hooks_dir"
