@@ -98,20 +98,41 @@ let
     else
       null;
 
-  shellHook =
-    if maintenance.gitHooks.enabled then
-      ''
-        if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-          git_dir="$(git rev-parse --absolute-git-dir)"
-          phenix_hooks_dir="$git_dir/phenix-flake-ci-hooks"
-          mkdir -p "$phenix_hooks_dir"
-          cp ${gitHooksPackage}/pre-commit "$phenix_hooks_dir/pre-commit"
-          chmod +x "$phenix_hooks_dir/pre-commit"
-          git config --local core.hooksPath "$phenix_hooks_dir"
-        fi
-      ''
-    else
-      "";
+  shellHook = ''
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git_dir="$(git rev-parse --absolute-git-dir)"
+      phenix_hooks_dir="$git_dir/phenix-flake-ci-hooks"
+      current_hooks_path="$(git config --local --get core.hooksPath || true)"
+
+      ${
+        if maintenance.gitHooks.enabled then
+          ''
+            if [[ -n "$current_hooks_path" && "$current_hooks_path" != "$phenix_hooks_dir" ]]; then
+              git config --local phenix-flake-ci.previousHooksPath "$current_hooks_path"
+            fi
+
+            mkdir -p "$phenix_hooks_dir"
+            cp ${gitHooksPackage}/pre-commit "$phenix_hooks_dir/pre-commit"
+            chmod +x "$phenix_hooks_dir/pre-commit"
+            git config --local core.hooksPath "$phenix_hooks_dir"
+          ''
+        else
+          ''
+            if [[ "$current_hooks_path" == "$phenix_hooks_dir" ]]; then
+              previous_hooks_path="$(git config --local --get phenix-flake-ci.previousHooksPath || true)"
+              if [[ -n "$previous_hooks_path" ]]; then
+                git config --local core.hooksPath "$previous_hooks_path"
+              else
+                git config --local --unset-all core.hooksPath || true
+              fi
+            fi
+
+            git config --local --unset-all phenix-flake-ci.previousHooksPath || true
+            rm -rf "$phenix_hooks_dir"
+          ''
+      }
+    fi
+  '';
 in
 {
   inherit
