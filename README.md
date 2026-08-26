@@ -1,8 +1,8 @@
 # Phenix Flake CI
 
-`phenix-flake-ci` is the shared declarative maintenance/testing library for Phenix flakes.
+`phenix-flake-ci` is the shared declarative maintenance and CI library for Phenix flakes.
 
-A repository declares one command tree. The library materializes that tree as a shell application, exposes selected commands as CI stages/steps, can render the committed GitHub Actions workflow, and can install an opt-in pre-commit hook that invokes the same command implementation.
+A repository declares one command tree. The library renders one dispatcher for interactive use and command-scoped packages for narrow execution boundaries such as CI jobs and git hooks. Command bodies stay in one definition.
 
 ## Flake input
 
@@ -40,40 +40,79 @@ let
           stage = "check";
           name = "Check";
         };
-        exec = "nix flake check --no-build";
+        runtimeInputs = pkgs: [ pkgs.statix ];
+        exec = "statix check .";
       };
 
       fix = {
         description = "Deterministic normalization";
+        runtimeInputs = pkgs: [ pkgs.nixfmt-rfc-style ];
         exec = "nixfmt .";
       };
     };
   };
 
-  materialized = ciLib.mkMaintenancePackage {
-    inherit pkgs maintenance;
+  outputs = ciLib.mkMaintenanceOutputs {
+    inherit maintenance;
+    systems = [ system ];
+    pkgsFor = _: pkgs;
+    outputName = "phenix-maintenance";
   };
 in {
-  packages.phenix-maintenance = materialized.package;
-  apps.phenix-maintenance = materialized.app;
+  packages = outputs.packages.${system};
+  apps = outputs.apps.${system};
 
   devShells.default = pkgs.mkShell {
-    packages = [ materialized.package ];
-    shellHook = materialized.shellHook;
+    packages = [ outputs.packages.${system}.phenix-maintenance ];
+    shellHook = (ciLib.mkMaintenancePackage {
+      inherit pkgs maintenance;
+    }).shellHook;
   };
 }
 ```
+
+`mkMaintenanceOutputs` exposes the compatibility dispatcher as `phenix-maintenance` and adds one hashed command-scoped output for every declared command path. Generated CI uses those scoped outputs automatically. The hash avoids collisions between command paths while keeping the command graph as the only source of semantics.
+
+## Explicit command dependencies
+
+A command that invokes another maintenance command must declare that relationship with `dependencies`.
+
+```nix
+commands = {
+  check.rust = {
+    runtimeInputs = pkgs: [ pkgs.cargo ];
+    exec = "cargo check --workspace";
+  };
+
+  rust-ci.clippy = {
+    dependencies = [ [ "check" "rust" ] ];
+    runtimeInputs = pkgs: [ pkgs.cargo pkgs.clippy ];
+    exec = ''
+      maintenance check rust
+      cargo clippy --workspace --all-targets -- -D warnings
+    '';
+  };
+};
+```
+
+A scoped package contains the selected command, descendants that an aggregate command executes, and declared dependencies. Missing dependencies and dependency cycles fail during evaluation. Runtime inputs are deduplicated before package construction.
 
 ## Git hooks
 
 Git hooks are disabled unless `gitHooks.enable = true` is declared. `gitHooks.preCommit` is a path into the maintenance command tree, for example `[ "fix" ]` or `[ "check" "format" ]`.
 
-When enabled, `mkMaintenancePackage` exposes a `shellHook`. A consumer can append that hook to its development shell. It installs the generated pre-commit hook into the repository's Git directory and sets the local `core.hooksPath` accordingly.
-
-The hook records the paths staged before maintenance runs, executes the configured maintenance command, re-stages only those paths, and runs `git diff --cached --check`. Outside the development shell it falls back to `nix develop --command ...`, so the repository does not need to carry a separate `.githooks` implementation.
+When enabled, `mkMaintenancePackage` exposes a `shellHook`. The installed pre-commit hook executes a package scoped to `gitHooks.preCommit`, so hook execution does not need the full maintenance runtime closure. The hook re-stages only paths that were staged before maintenance ran, then checks the staged diff.
 
 ## CI model
 
-Each command can set `ci.enable = true`. Enabled commands become visible CI steps. `ci.stage` groups steps into jobs; runner, timeout, dependencies, environment, and display names are declared alongside the command.
+Each command can set `ci.enable = true`. Enabled commands become CI steps. `ci.stage` groups steps into jobs. Runner, timeout, job dependencies, environment, and display names stay beside the command declaration.
 
-When `ci.github.enable = true`, the library renders the GitHub Actions workflow from the same command graph. Consumers should commit that generated projection and validate that it remains synchronized.
+When `ci.github.enable = true`, the library renders the GitHub Actions workflow from the same command graph. Each CI step invokes the command-scoped flake app generated for that command path. Consumers should commit the generated workflow and verify that it stays synchronized.
+
+The compatibility dispatcher remains available for development shell use:
+
+```console
+nix run .#phenix-maintenance -- check rust
+```
+
+Narrow CI and automation should use the generated command-scoped outputs instead of the dispatcher.

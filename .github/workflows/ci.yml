@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Evaluate library tests
+        run: nix eval --json .#lib.tests
+
+      - name: Exercise command-scoped package closure
+        run: |
+          set -euo pipefail
+          fixture=./tests/command-scoped-consumer
+
+          nix run --no-write-lock-file "$fixture#fix" -- fix
+          nix run --no-write-lock-file "$fixture#aggregate" -- aggregate
+          nix run --no-write-lock-file "$fixture#dependent" -- dependent
+          nix run --no-write-lock-file "$fixture#dispatcher" -- fix
+
+          fix_path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#fix")"
+          unrelated_path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#unrelated-tool")"
+
+          if nix path-info --recursive "$fix_path" | grep -Fx "$unrelated_path"; then
+            echo "command-scoped fix closure contains unrelated check tooling" >&2
+            exit 1
+          fi
+
+      - name: Evaluate flake
+        run: nix flake check --no-build

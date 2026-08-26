@@ -1,64 +1,55 @@
 {
   pkgs,
   maintenance,
+  commandPath ? null,
 }:
 let
-  inherit (builtins)
-    attrNames
-    concatLists
-    concatStringsSep
-    isFunction
-    isList
-    map
-    ;
+  inherit (builtins) concatStringsSep;
 
-  fail = message: throw "phenix-flake-ci: ${message}";
-
-  collectRuntimeInputs =
-    path: node:
-    let
-      raw = node.runtimeInputs or [ ];
-      resolved = if isFunction raw then raw pkgs else raw;
-      children = node.commands or { };
-      nested = concatLists (
-        map (name: collectRuntimeInputs (path ++ [ name ]) children.${name}) (attrNames children)
-      );
-    in
-    if !isList resolved then
-      fail "`${
-        builtins.concatStringsSep " " ([ maintenance.name ] ++ path)
-      }`: runtimeInputs must resolve to a list"
-    else
-      resolved ++ nested;
-
-  runtimeInputs = concatLists (
-    map (name: collectRuntimeInputs [ name ] maintenance.commands.${name}) (
-      attrNames maintenance.commands
-    )
-  );
-
-  basePackage = pkgs.writeShellApplication {
-    inherit (maintenance) name;
-    inherit runtimeInputs;
-    text = maintenance.script;
-
-    # Provider metadata may intentionally contain literal GitHub expressions such
-    # as `${{ runner.temp }}`. They are emitted from single-quoted shell strings
-    # specifically so the generated dispatcher does not expand them.
-    excludeShellChecks = [ "SC2016" ];
+  graph = import ./maintenance-command-graph.nix {
+    inherit maintenance pkgs;
   };
 
+  runtimeInputs =
+    if commandPath == null then graph.allRuntimeInputs else graph.runtimeInputsForPath commandPath;
+
+  scriptFor = path:
+    if path == null then
+      maintenance.script
+    else
+      import ./render-scoped-maintenance.nix {
+        inherit maintenance;
+        paths = graph.pathsForPath path;
+      };
+
+  makePackage = path: inputs:
+    pkgs.writeShellApplication {
+      inherit (maintenance) name;
+      runtimeInputs = inputs;
+      text = scriptFor path;
+      excludeShellChecks = [ "SC2016" ];
+    };
+
+  basePackage = makePackage commandPath runtimeInputs;
   package = basePackage.overrideAttrs (old: {
     passthru = (old.passthru or { }) // {
       phenixMaintenance = {
         schemaVersion = maintenance.ci.schemaVersion;
         commandName = maintenance.name;
+        scopePath = commandPath;
         inherit (maintenance) ci gitHooks;
       };
     };
   });
 
   hookArgs = concatStringsSep " " maintenance.gitHooks.preCommit;
+  hookCommandPackage =
+    if maintenance.gitHooks.enabled then
+      makePackage maintenance.gitHooks.preCommit (
+        graph.runtimeInputsForPath maintenance.gitHooks.preCommit
+      )
+    else
+      null;
 
   gitHooksPackage =
     if maintenance.gitHooks.enabled then
@@ -75,8 +66,8 @@ let
 
           mapfile -d $'\0' staged_paths < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
-          if command -v ${maintenance.name} >/dev/null 2>&1; then
-            ${maintenance.name} ${hookArgs}
+          if [[ -x ${hookCommandPackage}/bin/${maintenance.name} ]]; then
+            ${hookCommandPackage}/bin/${maintenance.name} ${hookArgs}
           elif command -v nix >/dev/null 2>&1; then
             nix develop --command ${maintenance.name} ${hookArgs}
           else
@@ -84,8 +75,6 @@ let
             exit 1
           fi
 
-          # Re-stage only paths that were already part of this commit. Maintenance
-          # may normalize other dirty files, but hooks must not capture them.
           for path in "''${staged_paths[@]}"; do
             if [[ -e "$path" || -L "$path" ]]; then
               git add -- "$path"
