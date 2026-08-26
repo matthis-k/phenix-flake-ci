@@ -12,6 +12,10 @@
   gitHooks ? { },
 }:
 let
+  graph = import ./maintenance-command-graph.nix {
+    maintenance = { inherit name commands; };
+  };
+
   rendered = renderMaintenance {
     inherit name description commands;
   };
@@ -35,6 +39,7 @@ let
     else
       null;
 in
+assert graph.valid;
 {
   inherit
     name

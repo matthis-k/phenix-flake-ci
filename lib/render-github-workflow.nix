@@ -19,6 +19,7 @@ let
     ;
 
   fail = message: throw "phenix-flake-ci: ${message}";
+  scopeOutputName = import ./scope-output-name.nix;
 
   validOutputName = match "^[A-Za-z0-9][A-Za-z0-9_-]*$" outputName != null;
   yaml = toJSON;
@@ -40,10 +41,16 @@ let
 
   renderStepLines =
     env: command:
+    let
+      scopedOutput = scopeOutputName {
+        inherit outputName;
+        path = command.path;
+      };
+    in
     [ "      - name: ${yaml command.name}" ]
     ++ renderEnvLines env
     ++ [
-      "        run: nix run .#${outputName} -- ${commandArgs command}"
+      "        run: nix run .#${scopedOutput} -- ${commandArgs command}"
       ""
     ];
 
