@@ -8,6 +8,8 @@ let
       pkgs = { };
     };
 
+  mkCi = import ./mk-ci.nix;
+
   commands = {
     leaf = {
       runtimeInputs = [ "leaf-tool" ];
@@ -70,6 +72,50 @@ let
     };
   }) true);
 
+  semanticCommands = mkCi {
+    build.compile = {
+      name = "Rust build";
+      exec = "cargo build --quiet";
+      runtimeInputs = pkgs: [ pkgs.cargo ];
+    };
+    test.rust = {
+      name = "Rust tests";
+      exec = "cargo test --quiet";
+      runtimeInputs = pkgs: [ pkgs.cargo ];
+    };
+    runtime.startup = {
+      name = "CLI startup";
+      exec = "phenix --version";
+    };
+    ci.timeoutMinutes = 60;
+  };
+  semanticTest = semanticCommands.pipeline.commands.test;
+  semanticTestScript = builtins.replaceStrings [ "\n" ] [ " " ] semanticTest.exec;
+  semanticTestInputs = semanticTest.runtimeInputs {
+    coreutils = "coreutils";
+    cargo = "cargo";
+  };
+  semanticRendered = import ./render-maintenance.nix {
+    name = "maintenance";
+    commands = semanticCommands;
+  };
+  semanticJob = builtins.head semanticRendered.jobs;
+
+  invalidQuietResult = builtins.tryEval (
+    builtins.deepSeq (mkCi {
+      test.bad = {
+        quiet = "yes";
+        exec = "true";
+      };
+    }) true
+  );
+  invalidCiOwnershipResult = builtins.tryEval (
+    builtins.deepSeq (mkCi {
+      test.good.exec = "true";
+      ci.stepName = "Other";
+    }) true
+  );
+
   scopeOutputName = import ./scope-output-name.nix;
   outputName = "phenix-maintenance";
   fixOutput = scopeOutputName {
@@ -125,6 +171,66 @@ in
 
   missingDependencyRejected =
     assert !missingResult.success;
+    true;
+
+  semanticPipelineIsOrdered =
+    assert semanticCommands.pipeline.order == [
+      "build"
+      "test"
+      "runtime"
+    ];
+    assert semanticCommands.pipeline.commands.build.ci.stage == "ci";
+    assert semanticTest.ci.stage == "ci";
+    assert semanticCommands.pipeline.commands.runtime.ci.stage == "ci";
+    assert semanticTest.ci.timeoutMinutes == 60;
+    true;
+
+  semanticPipelineProjectsToOneJob =
+    assert builtins.length semanticRendered.jobs == 1;
+    assert semanticJob.id == "ci";
+    assert builtins.map (command: command.path) semanticJob.commands == [
+      [
+        "pipeline"
+        "build"
+      ]
+      [
+        "pipeline"
+        "test"
+      ]
+      [
+        "pipeline"
+        "runtime"
+      ]
+    ];
+    true;
+
+  semanticPhasesHaveInteractiveAliases =
+    assert semanticCommands.test.dependencies == [
+      [
+        "pipeline"
+        "test"
+      ]
+    ];
+    assert builtins.match ".*pipeline test.*" semanticCommands.test.exec != null;
+    true;
+
+  semanticSuitesAreQuietByDefault =
+    assert builtins.match ".*PASS %s.*Rust tests.*" semanticTestScript != null;
+    assert builtins.match ".*FAIL %s.*Rust tests.*" semanticTestScript != null;
+    assert builtins.match ".*PHENIX_CI_VERBOSE.*" semanticTestScript != null;
+    assert builtins.match ".*cargo test --quiet.*" semanticTestScript != null;
+    true;
+
+  semanticPhaseRuntimeInputsAreMerged =
+    assert semanticTestInputs == [ "coreutils" "cargo" ];
+    true;
+
+  invalidSuiteQuietRejected =
+    assert !invalidQuietResult.success;
+    true;
+
+  invalidCiOwnershipRejected =
+    assert !invalidCiOwnershipResult.success;
     true;
 
   workflowUsesScopedOutput =
