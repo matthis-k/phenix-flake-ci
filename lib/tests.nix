@@ -85,13 +85,28 @@ let
     };
     runtime.startup = {
       name = "CLI startup";
+      needs = [ ];
+      cache = false;
       exec = "phenix --version";
     };
-    ci.timeoutMinutes = 60;
+    ci = {
+      timeoutMinutes = 60;
+      cache = {
+        paths = [
+          "\${{ runner.temp }}/cargo-home"
+          "\${{ runner.temp }}/cargo-target"
+        ];
+        key = "rust-\${{ runner.os }}-\${{ github.sha }}";
+        restoreKeys = [ "rust-\${{ runner.os }}-" ];
+      };
+    };
   };
-  semanticTest = semanticCommands.phases.commands.test;
-  semanticTestScript = builtins.replaceStrings [ "\n" ] [ " " ] semanticTest.exec;
-  semanticTestInputs = semanticTest.runtimeInputs {
+
+  semanticBuildJob = semanticCommands.jobs.commands.build-compile;
+  semanticTestJob = semanticCommands.jobs.commands.test-rust;
+  semanticRuntimeJob = semanticCommands.jobs.commands.runtime-startup;
+  semanticTestScript = builtins.replaceStrings [ "\n" ] [ " " ] semanticTestJob.exec;
+  semanticTestInputs = semanticTestJob.runtimeInputs {
     coreutils = "coreutils";
     jq = "jq";
     cargo = "cargo";
@@ -99,11 +114,14 @@ let
   semanticPipeline = semanticCommands.pipeline;
   semanticPipelineScript = builtins.replaceStrings [ "\n" ] [ " " ] semanticPipeline.exec;
   semanticPipelineInputs = semanticPipeline.runtimeInputs { jq = "jq"; };
-  semanticRendered = import ./render-maintenance.nix {
+  semanticRendered = import ./render-maintenance-with-cache.nix {
     name = "maintenance";
     commands = semanticCommands;
   };
-  semanticJob = builtins.head semanticRendered.jobs;
+  renderedJob = id: builtins.head (builtins.filter (job: job.id == id) semanticRendered.jobs);
+  renderedBuild = renderedJob "build-compile";
+  renderedTest = renderedJob "test-rust";
+  renderedRuntime = renderedJob "runtime-startup";
 
   invalidQuietResult = builtins.tryEval (
     builtins.deepSeq (mkCi {
@@ -117,6 +135,27 @@ let
     builtins.deepSeq (mkCi {
       test.good.exec = "true";
       ci.stepName = "Other";
+    }) true
+  );
+  missingSemanticNeed = builtins.tryEval (
+    builtins.deepSeq (mkCi {
+      build.compile.exec = "true";
+      test.good = {
+        needs = [ "build.missing" ];
+        exec = "true";
+      };
+    }) true
+  );
+  cyclicSemanticNeed = builtins.tryEval (
+    builtins.deepSeq (mkCi {
+      build.first = {
+        needs = [ "build.second" ];
+        exec = "true";
+      };
+      build.second = {
+        needs = [ "build.first" ];
+        exec = "true";
+      };
     }) true
   );
 
@@ -137,6 +176,11 @@ let
         timeout = 10;
         needs = [ ];
         env = { };
+        cache = {
+          paths = [ "\${{ runner.temp }}/cache" ];
+          key = "fixture-\${{ github.sha }}";
+          restoreKeys = [ "fixture-" ];
+        };
         commands = [
           {
             id = "fix";
@@ -177,44 +221,31 @@ in
     assert !missingResult.success;
     true;
 
-  semanticPipelineIsOrdered =
-    assert semanticCommands.phases.order == [
-      "build"
-      "test"
-      "runtime"
-    ];
+  semanticPhasesClassifyWithoutOrdering =
+    assert semanticCommands.build.dependencies == [ [ "jobs" "build-compile" ] ];
+    assert semanticCommands.test.dependencies == [ [ "jobs" "test-rust" ] ];
+    assert semanticCommands.runtime.dependencies == [ [ "jobs" "runtime-startup" ] ];
     assert semanticPipeline.dependencies == [
-      [
-        "phases"
-        "build"
-      ]
-      [
-        "phases"
-        "test"
-      ]
-      [
-        "phases"
-        "runtime"
-      ]
+      [ "build" ]
+      [ "test" ]
+      [ "runtime" ]
     ];
-    assert semanticPipeline.ci.stage == "ci";
-    assert semanticPipeline.ci.timeoutMinutes == 60;
     true;
 
-  semanticPipelineProjectsToOneJobAndOneStep =
-    assert builtins.length semanticRendered.jobs == 1;
-    assert semanticJob.id == "ci";
-    assert builtins.map (command: command.path) semanticJob.commands == [ [ "pipeline" ] ];
+  semanticJobsFormDependencyDag =
+    assert builtins.length semanticRendered.jobs == 3;
+    assert renderedBuild.needs == [ ];
+    assert renderedTest.needs == [ "build-compile" ];
+    assert renderedRuntime.needs == [ ];
     true;
 
-  semanticPhasesHaveInteractiveAliases =
-    assert semanticCommands.test.dependencies == [
-      [
-        "phases"
-        "test"
-      ]
+  semanticCacheCanBeSharedOrSkipped =
+    assert renderedBuild.cache.key == "rust-\${{ runner.os }}-\${{ github.sha }}";
+    assert renderedTest.cache.paths == [
+      "\${{ runner.temp }}/cargo-home"
+      "\${{ runner.temp }}/cargo-target"
     ];
-    assert builtins.match ".*phases test.*" semanticCommands.test.exec != null;
+    assert renderedRuntime.cache == null;
     true;
 
   semanticSuitesEmitJsonAndHideSuccessOutput =
@@ -225,12 +256,12 @@ in
     assert builtins.match ".*cargo test --quiet.*" semanticTestScript != null;
     true;
 
-  semanticPipelineCollectsAllPhaseFailures =
-    assert builtins.match ".*phases build.*phases test.*phases runtime.*" semanticPipelineScript != null;
+  semanticPipelineRemainsCompleteLocalDiagnostic =
+    assert builtins.match ".*\"\\$0\" build.*\"\\$0\" test.*\"\\$0\" runtime.*" semanticPipelineScript != null;
     assert builtins.match ".*failed_phases.*status:\"fail\".*" semanticPipelineScript != null;
     true;
 
-  semanticPhaseRuntimeInputsIncludeJsonReporter =
+  semanticSuiteRuntimeInputsAreNarrow =
     assert semanticTestInputs == [
       "coreutils"
       "jq"
@@ -247,7 +278,17 @@ in
     assert !invalidCiOwnershipResult.success;
     true;
 
-  workflowUsesScopedOutput =
+  missingSemanticDependencyRejected =
+    assert !missingSemanticNeed.success;
+    true;
+
+  semanticDependencyCycleRejected =
+    assert !cyclicSemanticNeed.success;
+    true;
+
+  workflowUsesScopedOutputAndCache =
+    assert builtins.match ".*actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830.*" workflowOneLine != null;
+    assert builtins.match ".*fixture-\\$\\{\\{ github.sha \\}\\}.*" workflowOneLine != null;
     assert builtins.match ".*nix run --quiet \\.#${fixOutput} -- fix.*" workflowOneLine != null;
     true;
 }
