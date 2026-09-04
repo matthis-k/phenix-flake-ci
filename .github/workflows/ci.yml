@@ -49,5 +49,36 @@ jobs:
             exit 1
           fi
 
+      - name: Exercise semantic CI suites
+        run: |
+          set -euo pipefail
+          fixture=./tests/semantic-ci-consumer
+
+          log="$(mktemp)"
+          if nix run --no-write-lock-file "$fixture#test" -- test >"$log" 2>&1; then
+            echo "semantic test phase unexpectedly succeeded" >&2
+            cat "$log" >&2
+            exit 1
+          fi
+
+          grep -F "FAIL Failing suite" "$log"
+          grep -F "expected failure detail" "$log"
+          grep -F "PASS Passing suite" "$log"
+          if grep -F "hidden success noise" "$log"; then
+            echo "successful suite output was not quiet" >&2
+            exit 1
+          fi
+
+          nix run --no-write-lock-file "$fixture#test" -- test b-success >"$log" 2>&1
+          grep -F "PASS Passing suite" "$log"
+          if grep -F "Failing suite" "$log"; then
+            echo "single-suite selection ran another suite" >&2
+            exit 1
+          fi
+
+          nix run --no-write-lock-file "$fixture#test" -- test --verbose b-success >"$log" 2>&1
+          grep -F "hidden success noise" "$log"
+          grep -F "PASS Passing suite" "$log"
+
       - name: Evaluate flake
         run: nix flake check --no-build

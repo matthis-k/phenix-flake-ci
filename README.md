@@ -2,7 +2,7 @@
 
 `phenix-flake-ci` is the shared declarative maintenance and CI library for Phenix flakes.
 
-A repository declares one command tree. The library renders one dispatcher for interactive use and command-scoped packages for narrow execution boundaries such as CI jobs and git hooks. Command bodies stay in one definition.
+It has two layers. `mkCi` defines the normal CI lifecycle. `mkMaintenance` remains the generic command graph for repository-specific checks, fixes, and hooks.
 
 ## Flake input
 
@@ -12,11 +12,120 @@ inputs.phenix-flake-ci.url = "github:matthis-k/phenix-flake-ci";
 
 The library is available as `inputs.phenix-flake-ci.lib`.
 
-## Basic usage
+## Semantic CI
+
+`mkCi` has five phases. Omit phases that do not apply.
+
+| Phase | Contract |
+| --- | --- |
+| `build` | Produce deployable artifacts. |
+| `test` | Run code-level tests such as unit and component suites. |
+| `runtime` | Start built artifacts and test their external behavior. |
+| `integration` | Exercise interactions between independently built artifacts. |
+| `product` | Exercise supported user journeys. |
+
+Cargo's test target type does not decide the Phenix phase. A Rust test under `tests/` can still be part of `test`. Use `integration` when the test crosses built program or service boundaries.
+
+Declare suites, not individual test cases:
+
+```nix
+ciCommands = ciLib.mkCi {
+  build.rust = {
+    name = "Rust workspace";
+    runtimeInputs = pkgs: [ pkgs.cargo ];
+    exec = "cargo build --workspace --locked --quiet";
+  };
+
+  test.rust = {
+    name = "Rust tests";
+    runtimeInputs = pkgs: [ pkgs.cargo ];
+    exec = "cargo test --workspace --locked --quiet";
+  };
+
+  runtime.cli = {
+    name = "CLI startup";
+    exec = "./result/bin/phenix --version";
+  };
+};
+```
+
+The generated command vocabulary is direct:
+
+```console
+maintenance build
+maintenance test
+maintenance runtime
+maintenance integration
+maintenance product
+```
+
+Run one suite by name:
+
+```console
+maintenance test rust
+```
+
+List the suites in a phase:
+
+```console
+maintenance test --list
+```
+
+Use `--verbose` when the underlying command output is useful:
+
+```console
+maintenance test --verbose
+maintenance test --verbose rust
+```
+
+### One build, later verification
+
+The generated GitHub projection keeps the semantic phases as ordered steps in one job by default:
+
+```text
+Build -> Test -> Runtime -> Integration -> Product
+```
+
+That is deliberate. GitHub jobs use separate runners. Keeping these phases in one job preserves the Nix store and working tree between them, so a later phase can use the exact artifacts produced by `build` instead of reconstructing them on another runner.
+
+A normal application stays separate. `nix run .#my-app` builds and runs that app. It does not invoke the semantic CI commands.
+
+### Suite output
+
+Suites are quiet by default. Successful process output is discarded. A successful suite prints one line:
+
+```text
+PASS Rust tests
+```
+
+A failed suite prints its status and the captured command output:
+
+```text
+FAIL Rust tests
+error: ...
+```
+
+All suites in a phase run before the phase returns failure. This gives one concise result per suite while preserving the full error output for failed suites.
+
+Use native quiet flags as well. For Cargo that usually means `--quiet`. The outer reporter still captures remaining success noise and exposes failure output consistently across tools.
+
+## Combining semantic CI and maintenance
+
+`mkCi` returns a normal maintenance command tree. Add repository-specific commands with an attribute-set merge:
 
 ```nix
 let
-  ciLib = inputs.phenix-flake-ci.lib;
+  ciCommands = ciLib.mkCi {
+    build.rust = {
+      runtimeInputs = pkgs: [ pkgs.cargo ];
+      exec = "cargo build --workspace --locked --quiet";
+    };
+
+    test.rust = {
+      runtimeInputs = pkgs: [ pkgs.cargo ];
+      exec = "cargo test --workspace --locked --quiet";
+    };
+  };
 
   maintenance = ciLib.mkMaintenance {
     name = "maintenance";
@@ -32,21 +141,16 @@ let
       preCommit = [ "fix" ];
     };
 
-    commands = {
-      check = {
-        description = "Read-only checks";
-        ci = {
-          enable = true;
-          stage = "check";
-          name = "Check";
-        };
-        runtimeInputs = pkgs: [ pkgs.statix ];
-        exec = "statix check .";
+    commands = ciCommands // {
+      check-format = {
+        description = "Check Nix formatting";
+        runtimeInputs = pkgs: [ pkgs.nixfmt ];
+        exec = "nixfmt --check .";
       };
 
       fix = {
-        description = "Deterministic normalization";
-        runtimeInputs = pkgs: [ pkgs.nixfmt-rfc-style ];
+        description = "Apply deterministic formatting";
+        runtimeInputs = pkgs: [ pkgs.nixfmt ];
         exec = "nixfmt .";
       };
     };
@@ -58,24 +162,34 @@ let
     pkgsFor = _: pkgs;
     outputName = "phenix-maintenance";
   };
-in {
+in
+{
   packages = outputs.packages.${system};
   apps = outputs.apps.${system};
-
-  devShells.default = pkgs.mkShell {
-    packages = [ outputs.packages.${system}.phenix-maintenance ];
-    shellHook = (ciLib.mkMaintenancePackage {
-      inherit pkgs maintenance;
-    }).shellHook;
-  };
 }
 ```
 
-`mkMaintenanceOutputs` exposes the compatibility dispatcher as `phenix-maintenance` and adds one hashed command-scoped output for every declared command path. Generated CI uses those scoped outputs automatically. The hash avoids collisions between command paths while keeping the command graph as the only source of semantics.
+GitHub job metadata is shared by the semantic phases because they intentionally run on one runner. Configure it through `mkCi.ci`:
 
-## Explicit command dependencies
+```nix
+ciCommands = ciLib.mkCi {
+  ci = {
+    name = "Rust";
+    runner = "ubuntu-latest";
+    timeoutMinutes = 60;
+    env.CARGO_TERM_QUIET = "true";
+  };
 
-A command that invokes another maintenance command must declare that relationship with `dependencies`.
+  build.rust = { ... };
+  test.rust = { ... };
+};
+```
+
+## Generic command graph
+
+`mkMaintenance` still supports arbitrary command trees. Each command can set `ci.enable = true`. `ci.stage` groups enabled commands into GitHub jobs. Runner, timeout, job dependencies, environment, and display names stay beside the command declaration.
+
+A command that invokes another maintenance command must declare that relationship with `dependencies`:
 
 ```nix
 commands = {
@@ -101,18 +215,14 @@ A scoped package contains the selected command, descendants that an aggregate co
 
 Git hooks are disabled unless `gitHooks.enable = true` is declared. `gitHooks.preCommit` is a path into the maintenance command tree, for example `[ "fix" ]` or `[ "check" "format" ]`.
 
-When enabled, `mkMaintenancePackage` exposes a `shellHook`. The installed pre-commit hook executes a package scoped to `gitHooks.preCommit`, so hook execution does not need the full maintenance runtime closure. The hook re-stages only paths that were staged before maintenance ran, then checks the staged diff.
+When enabled, `mkMaintenancePackage` exposes a `shellHook`. The installed pre-commit hook executes a package scoped to `gitHooks.preCommit`. The hook re-stages only paths that were staged before maintenance ran, then checks the staged diff.
 
-## CI model
+## Generated GitHub workflow
 
-Each command can set `ci.enable = true`. Enabled commands become CI steps. `ci.stage` groups steps into jobs. Runner, timeout, job dependencies, environment, and display names stay beside the command declaration.
+When `ci.github.enable = true`, the library renders the GitHub Actions workflow from the maintenance graph. Each CI step invokes the command-scoped flake app generated for that command path.
 
-When `ci.github.enable = true`, the library renders the GitHub Actions workflow from the same command graph. Each CI step invokes the command-scoped flake app generated for that command path. Consumers should commit the generated workflow and verify that it stays synchronized.
-
-The compatibility dispatcher remains available for development shell use:
+Consumers should commit the generated workflow and verify that it stays synchronized. The compatibility dispatcher remains available for development shell use:
 
 ```console
-nix run .#phenix-maintenance -- check rust
+nix run .#phenix-maintenance -- test
 ```
-
-Narrow CI and automation should use the generated command-scoped outputs instead of the dispatcher.

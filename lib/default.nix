@@ -1,5 +1,6 @@
 let
   ciSchemaVersion = 2;
+  mkCi = import ./mk-ci.nix;
   renderMaintenance = import ./render-maintenance.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
   normalizeGitHooks = import ./normalize-git-hooks.nix;
@@ -78,11 +79,12 @@ let
     };
 in
 {
-  version = "0.7.0";
+  version = "0.8.0";
   tests = import ./tests.nix;
   inherit
     ciSchemaVersion
     maintenanceCommandGraph
+    mkCi
     mkMaintenance
     mkMaintenanceOutputs
     mkMaintenancePackage
