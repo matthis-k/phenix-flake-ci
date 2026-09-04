@@ -100,6 +100,60 @@ The build job restores an older compatible cache when available, produces the cu
 
 Set `cache = false` on suites that do not benefit from the shared cache. This avoids paying transfer cost for independent Nix/package jobs.
 
+## JSON execution index
+
+Every generated maintenance executable carries a JSON index derived from the command DAG, CI declaration, and git-hook declaration. The executable reads that index to resolve machine invocations to the exact implementation program and arguments in the Nix store.
+
+Inspect the complete root index with `jq`:
+
+```console
+maintenance index | jq '.commands["test/rust"]'
+```
+
+A command entry contains its stable ID, path, children, dependencies, and exact execution target:
+
+```json
+{
+  "id": "fix",
+  "path": ["fix"],
+  "kind": "exec",
+  "children": [],
+  "dependencies": [],
+  "execution": {
+    "program": "/nix/store/...-maintenance-impl/bin/maintenance-impl",
+    "args": ["fix"]
+  }
+}
+```
+
+The root index also exposes CI jobs and hook targets. For example:
+
+```console
+maintenance index | jq '.ci.jobs'
+maintenance index | jq '.hooks["pre-commit"]'
+```
+
+Machine integrations invoke a command by feeding one JSON object to `invoke`:
+
+```console
+printf '%s\n' '{"command":"fix"}' | maintenance invoke
+```
+
+An invocation may include string arguments and source metadata:
+
+```json
+{
+  "command": "fix",
+  "args": [],
+  "source": {
+    "type": "git-hook",
+    "hook": "pre-commit"
+  }
+}
+```
+
+Generated git hooks and GitHub workflows are thin adapters. They feed an invocation into the command-scoped executable instead of embedding command execution logic. A scoped executable indexes only the commands in its dependency closure, so it cannot select unrelated commands or pull their tooling into the closure.
+
 ## Local execution
 
 The direct command vocabulary remains phase-oriented:
@@ -195,6 +249,6 @@ A command that invokes another maintenance command must declare that relationshi
 
 ## Generated GitHub workflow
 
-When `ci.github.enable = true`, the workflow is generated from the maintenance graph. Each CI job invokes a command-scoped flake app with `nix run --quiet`.
+When `ci.github.enable = true`, the workflow is generated from the maintenance graph. Each CI job feeds a JSON invocation into a command-scoped flake app with `nix run --quiet`.
 
 Consumers should commit the generated workflow and keep it synchronized with the Nix declaration.

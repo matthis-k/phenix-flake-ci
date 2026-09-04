@@ -16,6 +16,7 @@ let
     concatStringsSep
     map
     match
+    replaceStrings
     toJSON
     ;
 
@@ -25,7 +26,7 @@ let
   validOutputName = match "^[A-Za-z0-9][A-Za-z0-9_-]*$" outputName != null;
   yaml = toJSON;
   joinLines = concatStringsSep "\n";
-  commandArgs = command: concatStringsSep " " command.path;
+  shellQuote = value: "'${replaceStrings [ "'" ] [ "'\"'\"'" ] value}'";
 
   renderEnvLines =
     env:
@@ -61,17 +62,25 @@ let
       ++ [ "" ];
 
   renderStepLines =
-    env: command:
+    job: command:
     let
       scopedOutput = scopeOutputName {
         inherit outputName;
         path = command.path;
       };
+      invocation = toJSON {
+        command = command.id;
+        source = {
+          type = "github-actions";
+          job = job.id;
+        };
+      };
+      runCommand = "printf '%s\\n' ${shellQuote invocation} | nix run --quiet .#${scopedOutput} -- invoke";
     in
     [ "      - name: ${yaml command.name}" ]
-    ++ renderEnvLines env
+    ++ renderEnvLines job.env
     ++ [
-      "        run: nix run --quiet .#${scopedOutput} -- ${commandArgs command}"
+      "        run: ${yaml runCommand}"
       ""
     ];
 
@@ -109,7 +118,7 @@ let
       ""
     ]
     ++ renderCacheLines (job.cache or null)
-    ++ concatLists (map (renderStepLines job.env) job.commands)
+    ++ concatLists (map (renderStepLines job) job.commands)
     ++ (if clean then renderCleanLines else [ ])
     ++ [ "" ];
 

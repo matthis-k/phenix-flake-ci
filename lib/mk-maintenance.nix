@@ -12,6 +12,16 @@
   gitHooks ? { },
 }:
 let
+  reservedCommands = builtins.filter (command: builtins.hasAttr command commands) [
+    "index"
+    "invoke"
+  ];
+  commandsValid =
+    if reservedCommands == [ ] then
+      true
+    else
+      throw "phenix-flake-ci: reserved top-level commands: ${builtins.concatStringsSep ", " reservedCommands}";
+
   graph = import ./maintenance-command-graph.nix {
     maintenance = { inherit name commands; };
   };
@@ -22,6 +32,18 @@ let
 
   normalizedGitHooks = normalizeGitHooks {
     inherit name commands gitHooks;
+  };
+
+  index = import ./maintenance-index.nix {
+    inherit
+      name
+      description
+      commands
+      ciSchemaVersion
+      ;
+    jobs = rendered.publicJobs;
+    inherit (rendered) matrix;
+    gitHooks = normalizedGitHooks;
   };
 
   github = ci.github or { };
@@ -39,12 +61,14 @@ let
     else
       null;
 in
+assert commandsValid;
 assert graph.valid;
 {
   inherit
     name
     description
     commands
+    index
     ;
   inherit (rendered) script;
   gitHooks = normalizedGitHooks;
