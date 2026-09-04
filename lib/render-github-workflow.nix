@@ -50,7 +50,7 @@ let
     [ "      - name: ${yaml command.name}" ]
     ++ renderEnvLines env
     ++ [
-      "        run: nix run .#${scopedOutput} -- ${commandArgs command}"
+      "        run: nix run --quiet .#${scopedOutput} -- ${commandArgs command}"
       ""
     ];
 
