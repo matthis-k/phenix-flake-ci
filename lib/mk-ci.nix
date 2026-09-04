@@ -11,17 +11,19 @@ let
     attrNames
     concatLists
     concatStringsSep
+    elem
+    elemAt
+    filter
     foldl'
-    hashString
     isAttrs
     isBool
     isFunction
     isList
     isString
     length
+    listToAttrs
     map
     match
-    removeAttrs
     replaceStrings
     ;
 
@@ -61,48 +63,57 @@ let
     }
   ];
 
+  cache = ci.cache or null;
+
   ciValid =
     if !isAttrs ci then
       fail "mkCi ci must be an attribute set"
     else if builtins.hasAttr "stepName" ci then
-      fail "mkCi ci.stepName is pipeline-owned"
+      fail "mkCi ci.stepName is suite-owned"
     else if builtins.hasAttr "enable" ci then
       fail "mkCi ci.enable is always true"
+    else if builtins.hasAttr "stage" ci then
+      fail "mkCi ci.stage is suite-owned"
+    else if cache != null && !isAttrs cache then
+      fail "mkCi ci.cache must be an attribute set"
+    else if cache != null && (!builtins.hasAttr "paths" cache || !isList cache.paths || cache.paths == [ ] || !(builtins.all isString cache.paths)) then
+      fail "mkCi ci.cache.paths must be a non-empty list of strings"
+    else if cache != null && (!builtins.hasAttr "key" cache || !isString cache.key) then
+      fail "mkCi ci.cache.key must be a string"
+    else if cache != null && builtins.hasAttr "restoreKeys" cache && (!isList cache.restoreKeys || !(builtins.all isString cache.restoreKeys)) then
+      fail "mkCi ci.cache.restoreKeys must be a list of strings"
     else
       true;
 
-  sharedCi = (removeAttrs ci [ "stage" ]) // {
-    enable = true;
-    stage = ci.stage or "ci";
-    name = ci.name or "CI";
-    needs = ci.needs or [ ];
-  };
-
-  suiteFunctionId = phaseId: suiteName: "suite_${hashString "sha256" "${phaseId}/${suiteName}"}";
-
   normalizeSuite =
-    phaseId: suiteName: suite:
+    phase: suiteName: suite:
     let
       description = suite.description or suiteName;
       label = suite.name or description;
       quiet = suite.quiet or true;
       runtimeInputs = suite.runtimeInputs or [ ];
       exec = suite.exec or null;
+      needs = suite.needs or null;
+      useCache = suite.cache or true;
     in
     if !isAttrs suite then
-      fail "mkCi ${phaseId}.${suiteName} must be an attribute set"
+      fail "mkCi ${phase.id}.${suiteName} must be an attribute set"
     else if match "^[A-Za-z0-9][A-Za-z0-9_-]*$" suiteName == null then
-      fail "mkCi ${phaseId} has invalid suite name `${suiteName}`"
+      fail "mkCi ${phase.id} has invalid suite name `${suiteName}`"
     else if !isString description then
-      fail "mkCi ${phaseId}.${suiteName}.description must be a string"
+      fail "mkCi ${phase.id}.${suiteName}.description must be a string"
     else if !isString label then
-      fail "mkCi ${phaseId}.${suiteName}.name must be a string"
+      fail "mkCi ${phase.id}.${suiteName}.name must be a string"
     else if !isBool quiet then
-      fail "mkCi ${phaseId}.${suiteName}.quiet must be a boolean"
+      fail "mkCi ${phase.id}.${suiteName}.quiet must be a boolean"
     else if !(isList runtimeInputs || isFunction runtimeInputs) then
-      fail "mkCi ${phaseId}.${suiteName}.runtimeInputs must be a list or a pkgs function"
+      fail "mkCi ${phase.id}.${suiteName}.runtimeInputs must be a list or a pkgs function"
     else if !isString exec then
-      fail "mkCi ${phaseId}.${suiteName}.exec must be a shell script string"
+      fail "mkCi ${phase.id}.${suiteName}.exec must be a shell script string"
+    else if needs != null && (!isList needs || !(builtins.all isString needs)) then
+      fail "mkCi ${phase.id}.${suiteName}.needs must be a list of `phase.suite` strings"
+    else if !isBool useCache then
+      fail "mkCi ${phase.id}.${suiteName}.cache must be a boolean"
     else
       {
         inherit
@@ -112,8 +123,12 @@ let
           quiet
           runtimeInputs
           exec
+          needs
+          useCache
           ;
-        functionId = suiteFunctionId phaseId suiteName;
+        phaseId = phase.id;
+        phaseName = phase.name;
+        taskId = "${phase.id}-${suiteName}";
       };
 
   normalizeSuites =
@@ -121,12 +136,95 @@ let
     if !isAttrs phase.suites then
       fail "mkCi ${phase.id} must be an attribute set of suites"
     else
-      map (suiteName: normalizeSuite phase.id suiteName phase.suites.${suiteName}) (attrNames phase.suites);
+      map (suiteName: normalizeSuite phase suiteName phase.suites.${suiteName}) (attrNames phase.suites);
+
+  normalizedPhases = foldl'
+    (
+      acc: phase:
+      let
+        suites = normalizeSuites phase;
+      in
+      if suites == [ ] then
+        acc
+      else
+        acc ++ [ (phase // { inherit suites; }) ]
+    )
+    [ ]
+    phases;
+
+  allSuites = concatLists (map (phase: phase.suites) normalizedPhases);
+  buildRefs = map (suite: "${suite.phaseId}.${suite.suiteName}") (filter (suite: suite.phaseId == "build") allSuites);
+
+  parseNeed =
+    raw:
+    let
+      parts = match "^([A-Za-z0-9][A-Za-z0-9_-]*)\\.([A-Za-z0-9][A-Za-z0-9_-]*)$" raw;
+    in
+    if parts == null then
+      fail "mkCi dependency `${raw}` must use `phase.suite`"
+    else
+      {
+        phaseId = elemAt parts 0;
+        suiteName = elemAt parts 1;
+        taskId = "${elemAt parts 0}-${elemAt parts 1}";
+        ref = raw;
+      };
+
+  suitesWithNeeds = map (
+    suite:
+    let
+      rawNeeds =
+        if suite.needs != null then
+          suite.needs
+        else if suite.phaseId == "build" then
+          [ ]
+        else
+          buildRefs;
+    in
+    suite // { needs = map parseNeed rawNeeds; }
+  ) allSuites;
+
+  taskIds = map (suite: suite.taskId) suitesWithNeeds;
+  taskMap = listToAttrs (map (suite: {
+    name = suite.taskId;
+    value = suite;
+  }) suitesWithNeeds);
+
+  needsValid = builtins.all (
+    suite:
+    builtins.all (
+      need:
+      if !elem need.taskId taskIds then
+        fail "mkCi ${suite.phaseId}.${suite.suiteName} depends on unknown suite `${need.ref}`"
+      else if need.taskId == suite.taskId then
+        fail "mkCi ${suite.phaseId}.${suite.suiteName} cannot depend on itself"
+      else
+        true
+    ) suite.needs
+  ) suitesWithNeeds;
+
+  reaches =
+    start: current: seen:
+    if elem current seen then
+      false
+    else
+      builtins.any (
+        need:
+        need.taskId == start || reaches start need.taskId (seen ++ [ current ])
+      ) taskMap.${current}.needs;
+
+  acyclic = builtins.all (
+    suite:
+    if reaches suite.taskId suite.taskId [ ] then
+      fail "mkCi dependency cycle reaches `${suite.phaseId}.${suite.suiteName}`"
+    else
+      true
+  ) suitesWithNeeds;
 
   renderSuccess =
-    phaseId: suite:
+    suite:
     let
-      phase = shellQuote phaseId;
+      phase = shellQuote suite.phaseId;
       suiteName = shellQuote suite.suiteName;
       label = shellQuote suite.label;
       withOutput = ''
@@ -151,78 +249,137 @@ let
     in
     if suite.quiet then quietOutput else withOutput;
 
-  renderSuiteFunction =
-    phaseId: suite:
+  renderSuiteExec =
+    suite:
     let
-      phase = shellQuote phaseId;
+      phase = shellQuote suite.phaseId;
       suiteName = shellQuote suite.suiteName;
       label = shellQuote suite.label;
-      success = renderSuccess phaseId suite;
+      success = renderSuccess suite;
     in
     ''
-      ${suite.functionId}() {
-        local phenix_ci_log phenix_ci_status
+      if [[ "''${1:-}" == "--verbose" ]]; then
+        export PHENIX_CI_VERBOSE=1
+        shift
+      fi
 
-        phenix_ci_log="$(mktemp)"
-        if (
-          ${suite.exec}
-        ) >"$phenix_ci_log" 2>&1; then
-          ${success}
-          rm -f "$phenix_ci_log"
-          return 0
-        else
-          phenix_ci_status=$?
-          jq -cn \
-            --arg phase ${phase} \
-            --arg suite ${suiteName} \
-            --arg name ${label} \
-            --argjson exit_code "$phenix_ci_status" \
-            --rawfile output "$phenix_ci_log" \
-            '{type:"suite",phase:$phase,suite:$suite,name:$name,status:"fail",exit_code:$exit_code,output:$output}'
-          rm -f "$phenix_ci_log"
-          return "$phenix_ci_status"
-        fi
-      }
+      if (( $# > 0 )); then
+        jq -cn \
+          --arg phase ${phase} \
+          --arg suite ${suiteName} \
+          '{type:"error",kind:"unexpected_arguments",phase:$phase,suite:$suite}'
+        return 2
+      fi
+
+      phenix_ci_log="$(mktemp)"
+      if (
+        ${suite.exec}
+      ) >"$phenix_ci_log" 2>&1; then
+        ${success}
+        rm -f "$phenix_ci_log"
+        return 0
+      else
+        phenix_ci_status=$?
+        jq -cn \
+          --arg phase ${phase} \
+          --arg suite ${suiteName} \
+          --arg name ${label} \
+          --argjson exit_code "$phenix_ci_status" \
+          --rawfile output "$phenix_ci_log" \
+          '{type:"suite",phase:$phase,suite:$suite,name:$name,status:"fail",exit_code:$exit_code,output:$output}'
+        rm -f "$phenix_ci_log"
+        return "$phenix_ci_status"
+      fi
     '';
 
-  renderSuiteCase = suite: ''
-    ${shellQuote suite.suiteName})
-      shift
-      ${suite.functionId} "$@"
-      ;;
-  '';
+  suiteRuntimeInputs =
+    suite: pkgs:
+    [
+      pkgs.coreutils
+      pkgs.jq
+    ]
+    ++ (if isFunction suite.runtimeInputs then suite.runtimeInputs pkgs else suite.runtimeInputs);
 
-  renderSuiteRun = suite: ''
-    if ${suite.functionId}; then
-      :
-    else
-      phenix_ci_failures+=(${shellQuote suite.suiteName})
-    fi
-  '';
+  globalNeeds = ci.needs or [ ];
+  globalEnv = ci.env or { };
+  globalRunner = ci.runner or "ubuntu-latest";
+  globalTimeout = ci.timeoutMinutes or 30;
+  jobPrefix = ci.name or null;
+
+  suiteJobName =
+    suite:
+    let
+      semanticName = "${suite.phaseName} / ${suite.label}";
+    in
+    if jobPrefix == null then semanticName else "${jobPrefix} / ${semanticName}";
+
+  suiteCommands = listToAttrs (map (
+    suite:
+    {
+      name = suite.taskId;
+      value = {
+        description = suite.label;
+        runtimeInputs = suiteRuntimeInputs suite;
+        exec = renderSuiteExec suite;
+        ci = {
+          enable = true;
+          stage = suite.taskId;
+          name = suiteJobName suite;
+          stepName = suite.label;
+          runner = globalRunner;
+          timeoutMinutes = globalTimeout;
+          needs = globalNeeds ++ map (need: need.taskId) suite.needs;
+          env = globalEnv;
+          cache = if suite.useCache then cache else null;
+        };
+      };
+    }
+  ) suitesWithNeeds);
+
+  suitesForPhase =
+    phaseId: filter (suite: suite.phaseId == phaseId) suitesWithNeeds;
 
   renderListRow =
-    phaseId: suite:
+    suite:
     ''
       jq -cn \
-        --arg phase ${shellQuote phaseId} \
+        --arg phase ${shellQuote suite.phaseId} \
         --arg suite ${shellQuote suite.suiteName} \
         --arg name ${shellQuote suite.label} \
         '{type:"suite_definition",phase:$phase,suite:$suite,name:$name}'
     '';
 
+  renderPhaseCase =
+    suite:
+    ''
+      ${shellQuote suite.suiteName})
+        shift
+        "$0" jobs ${suite.taskId} "''${phenix_ci_verbose_arg[@]}" "$@"
+        ;;
+    '';
+
+  renderPhaseRun =
+    suite:
+    ''
+      if "$0" jobs ${suite.taskId} "''${phenix_ci_verbose_arg[@]}"; then
+        :
+      else
+        phenix_ci_failures+=(${shellQuote suite.suiteName})
+      fi
+    '';
+
   renderPhaseExec =
-    phase: suites:
+    phase:
     let
-      functions = concatStringsSep "\n" (map (renderSuiteFunction phase.id) suites);
-      cases = concatStringsSep "\n" (map renderSuiteCase suites);
-      runs = concatStringsSep "\n" (map renderSuiteRun suites);
-      listRows = concatStringsSep "\n" (map (renderListRow phase.id) suites);
+      suites = suitesForPhase phase.id;
+      cases = concatStringsSep "\n" (map renderPhaseCase suites);
+      runs = concatStringsSep "\n" (map renderPhaseRun suites);
+      listRows = concatStringsSep "\n" (map renderListRow suites);
     in
     ''
-      ${functions}
-
+      phenix_ci_verbose_arg=()
       if [[ "''${1:-}" == "--verbose" ]]; then
-        export PHENIX_CI_VERBOSE=1
+        phenix_ci_verbose_arg=(--verbose)
         shift
       fi
 
@@ -253,88 +410,34 @@ let
       fi
     '';
 
-  runtimeInputsFor =
-    suites: pkgs:
-    [
-      pkgs.coreutils
-      pkgs.jq
-    ]
-    ++ concatLists (
-      map (
-        suite:
-        if isFunction suite.runtimeInputs then suite.runtimeInputs pkgs else suite.runtimeInputs
-      ) suites
-    );
-
-  normalizedPhases =
-    assert ciValid;
-    foldl'
-      (
-        acc: phase:
-        let
-          suites = normalizeSuites phase;
-        in
-        if suites == [ ] then
-          acc
-        else
-          acc
-          ++ [
-            (phase
-              // {
-                inherit suites;
-                command = {
-                  inherit (phase) description;
-                  runtimeInputs = runtimeInputsFor suites;
-                  exec = renderPhaseExec phase suites;
-                };
-              })
-          ]
-      )
-      [ ]
-      phases;
-
-  phaseCommands = builtins.listToAttrs (
-    map (phase: {
-      name = phase.id;
-      value = phase.command;
-    }) normalizedPhases
-  );
-
-  phaseOrder = map (phase: phase.id) normalizedPhases;
-
-  aliases = builtins.listToAttrs (
-    map (phase: {
+  phaseCommands = listToAttrs (map (
+    phase:
+    let
+      suites = suitesForPhase phase.id;
+    in
+    {
       name = phase.id;
       value = {
         inherit (phase) description;
-        dependencies = [
-          [
-            "phases"
-            phase.id
-          ]
-        ];
-        exec = ''
-          "$0" phases ${phase.id} "$@"
-        '';
+        dependencies = map (suite: [ "jobs" suite.taskId ]) suites;
+        runtimeInputs = pkgs: [ pkgs.jq ];
+        exec = renderPhaseExec phase;
       };
-    }) normalizedPhases
-  );
+    }
+  ) normalizedPhases);
 
-  pipelineDependencies = map (phase: [
-    "phases"
-    phase.id
-  ]) normalizedPhases;
-
-  renderPipelineRun = phase: ''
-    if "$0" phases ${phase.id}; then
-      :
-    else
-      phenix_ci_failed_phases+=(${shellQuote phase.id})
-    fi
-  '';
+  renderPipelineRun =
+    phase:
+    ''
+      if "$0" ${phase.id}; then
+        :
+      else
+        phenix_ci_failed_phases+=(${shellQuote phase.id})
+      fi
+    '';
 
   pipelineRuns = concatStringsSep "\n" (map renderPipelineRun normalizedPhases);
-  suiteCount = foldl' (total: phase: total + length phase.suites) 0 normalizedPhases;
+  suiteCount = length suitesWithNeeds;
 
   pipelineExec = ''
     phenix_ci_failed_phases=()
@@ -359,24 +462,39 @@ let
       '{type:"summary",status:"pass",suites:$suites}'
   '';
 in
+assert ciValid;
+assert needsValid;
+assert acyclic;
 if normalizedPhases == [ ] then
   fail "mkCi requires at least one suite"
 else
-  aliases
+  phaseCommands
   // {
-    phases = {
-      description = "Run one semantic CI phase";
-      order = phaseOrder;
-      commands = phaseCommands;
+    jobs = {
+      description = "Run one semantic CI suite";
+      commands = suiteCommands;
     };
 
     pipeline = {
-      description = "Run every semantic CI phase and report all results";
-      dependencies = pipelineDependencies;
+      description = "Run every semantic CI phase locally and report all results";
+      dependencies = map (phase: [ phase.id ]) normalizedPhases;
       runtimeInputs = pkgs: [ pkgs.jq ];
       exec = pipelineExec;
-      ci = sharedCi // {
-        stepName = "CI";
-      };
+    };
+
+    ci-plan = {
+      description = "List semantic CI suites and dependencies";
+      runtimeInputs = pkgs: [ pkgs.jq ];
+      exec = concatStringsSep "\n" (map (
+        suite:
+        ''
+          jq -cn \
+            --arg phase ${shellQuote suite.phaseId} \
+            --arg suite ${shellQuote suite.suiteName} \
+            --arg name ${shellQuote suite.label} \
+            --argjson needs ${shellQuote (builtins.toJSON (map (need: need.ref) suite.needs))} \
+            '{type:"suite_definition",phase:$phase,suite:$suite,name:$name,needs:$needs}'
+        ''
+      ) suitesWithNeeds);
     };
   }

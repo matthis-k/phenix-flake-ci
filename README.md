@@ -1,32 +1,30 @@
 # Phenix Flake CI
 
-`phenix-flake-ci` is the shared declarative maintenance and CI library for Phenix flakes.
+`phenix-flake-ci` provides a declarative CI and maintenance model for Phenix flakes.
 
-It has two layers. `mkCi` defines the normal CI lifecycle. `mkMaintenance` remains the generic command graph for repository-specific checks, fixes, and hooks.
+`mkCi` defines semantic CI suites. `mkMaintenance` remains the generic command graph for repository-specific validation, fixes, and hooks.
 
-## Flake input
+## Semantic phases
 
-```nix
-inputs.phenix-flake-ci.url = "github:matthis-k/phenix-flake-ci";
-```
-
-The library is available as `inputs.phenix-flake-ci.lib`.
-
-## Semantic CI
-
-`mkCi` has five phases. Omit phases that do not apply.
+`mkCi` classifies suites with five phase names:
 
 | Phase | Contract |
 | --- | --- |
-| `build` | Produce deployable artifacts. |
-| `test` | Run code-level tests such as unit and component suites. |
-| `runtime` | Start built artifacts and test their external behavior. |
-| `integration` | Exercise interactions between independently built artifacts. |
-| `product` | Exercise supported user journeys. |
+| `build` | Produce deployable build state or artifacts. |
+| `test` | Run code-level tests. |
+| `runtime` | Exercise one built program through its runtime boundary. |
+| `integration` | Exercise interaction between independently built components. |
+| `product` | Exercise supported product or user journeys. |
 
-Cargo's test target type does not decide the Phenix phase. A Rust test under `tests/` can still be part of `test`. Use `integration` when the test crosses built program or service boundaries.
+The phase is classification. It does not impose execution order.
 
-Declare suites, not individual test cases:
+Cargo's `tests/` target kind does not decide the Phenix phase. A Cargo integration-test target can still be a `test` suite when it only tests code-level behavior.
+
+## CI as a dependency DAG
+
+Each semantic suite is an independent CI node. GitHub renders each node as a separate job, so independent suites use separate runners and execute concurrently.
+
+Dependencies use `needs` with `phase.suite` references:
 
 ```nix
 ciCommands = ciLib.mkCi {
@@ -36,20 +34,75 @@ ciCommands = ciLib.mkCi {
     exec = "cargo build --workspace --locked --quiet";
   };
 
-  test.rust = {
-    name = "Rust tests";
+  test.unit = {
+    name = "Rust unit tests";
     runtimeInputs = pkgs: [ pkgs.cargo ];
-    exec = "cargo test --workspace --locked --quiet";
+    exec = "cargo test --workspace --lib --bins --locked --quiet";
   };
 
-  runtime.cli = {
-    name = "CLI startup";
-    exec = "./result/bin/phenix --version";
+  test.docs = {
+    name = "Rust doc tests";
+    runtimeInputs = pkgs: [ pkgs.cargo ];
+    exec = "cargo test --workspace --doc --locked --quiet";
+  };
+
+  product.package = {
+    name = "Package smoke";
+    needs = [ ];
+    cache = false;
+    exec = "nix build --no-link .#checks.x86_64-linux.package-smoke";
   };
 };
 ```
 
-The generated command vocabulary is direct:
+When at least one `build` suite exists, non-build suites depend on every build suite by default. Set `needs = [ ]` when a suite is actually independent of build output. Explicit dependencies replace that default.
+
+This produces a graph such as:
+
+```text
+                  test.unit
+                /
+             build ─── test.docs
+                \
+                  runtime.cli
+
+product.package  # independent and starts immediately
+```
+
+Sibling jobs do not wait for each other. A failed sibling does not cancel unrelated jobs. The generated final gate waits for every CI job and reports failure if any required job failed or was skipped.
+
+`maintenance ci-plan` emits the semantic DAG as NDJSON.
+
+## Shared build state
+
+Separate GitHub jobs do not share a filesystem. `mkCi.ci.cache` can use GitHub Actions cache to transfer reusable build state from prerequisite jobs to dependent jobs:
+
+```nix
+ci = {
+  env = {
+    CARGO_HOME = "\${{ runner.temp }}/cargo-home";
+    CARGO_TARGET_DIR = "\${{ runner.temp }}/cargo-target";
+    CARGO_TERM_QUIET = "true";
+  };
+
+  cache = {
+    paths = [
+      "\${{ runner.temp }}/cargo-home"
+      "\${{ runner.temp }}/cargo-target"
+    ];
+    key = "rust-\${{ runner.os }}-\${{ github.sha }}";
+    restoreKeys = [ "rust-\${{ runner.os }}-" ];
+  };
+};
+```
+
+The build job restores an older compatible cache when available, produces the current build state, and saves the exact commit key at job completion. Dependent jobs start after the build job and restore that exact state.
+
+Set `cache = false` on suites that do not benefit from the shared cache. This avoids paying transfer cost for independent Nix/package jobs.
+
+## Local execution
+
+The direct command vocabulary remains phase-oriented:
 
 ```console
 maintenance build
@@ -60,96 +113,55 @@ maintenance product
 maintenance pipeline
 ```
 
-`maintenance pipeline` runs every declared phase in order. A failed phase does not stop later phases. The command records the failed phases and returns non-zero only after the complete pipeline has run.
-
-Run one suite by name:
+Run one suite:
 
 ```console
-maintenance test rust
+maintenance test unit
 ```
 
-List the suites in a phase:
+List suites:
 
 ```console
 maintenance test --list
 ```
 
-Use `--verbose` when successful command output is useful:
+`maintenance pipeline` is intentionally a complete local diagnostic command. It runs declared phases serially, runs all suites even after failures, and emits one final aggregate status. GitHub does not use this serial pipeline for scheduling.
+
+## NDJSON reporting
+
+Semantic suites emit newline-delimited JSON. Successful suite output is hidden by default:
+
+```json
+{"type":"suite","phase":"test","suite":"unit","name":"Rust unit tests","status":"pass"}
+```
+
+Failures include the subprocess exit code and complete captured output:
+
+```json
+{"type":"suite","phase":"test","suite":"unit","name":"Rust unit tests","status":"fail","exit_code":101,"output":"error: ...\n"}
+```
+
+Use `--verbose` to include successful output while preserving valid NDJSON:
 
 ```console
-maintenance test --verbose
-maintenance test --verbose rust
+maintenance test --verbose unit
 ```
 
-### One build, later verification
+Use native quiet modes such as Cargo `--quiet` as well. The outer reporter still preserves detailed failure output.
 
-Generated GitHub CI invokes the semantic pipeline once on one runner:
+## Combining CI and maintenance
 
-```text
-Build -> Test -> Runtime -> Integration -> Product -> final status
-```
-
-The Nix store, working tree, Cargo home, and Cargo target directory remain available for the whole pipeline. Later phases can reuse artifacts produced by earlier phases.
-
-The pipeline owns failure aggregation. GitHub sees one final exit status, so a failure in `build`, `test`, or another phase cannot cause GitHub to skip later semantic phases.
-
-A normal application stays separate. `nix run .#my-app` builds and runs that app. It does not invoke semantic CI commands.
-
-### NDJSON output
-
-Semantic CI writes newline-delimited JSON. Each line is one complete JSON object, so agents can stream it through `jq` without parsing prose.
-
-A successful suite is brief:
-
-```json
-{"type":"suite","phase":"test","suite":"rust","name":"Rust tests","status":"pass"}
-```
-
-Successful command output is captured and discarded by default. A failed suite includes the exit code and captured output:
-
-```json
-{"type":"suite","phase":"test","suite":"rust","name":"Rust tests","status":"fail","exit_code":101,"output":"error: ...\n"}
-```
-
-Every suite in a phase runs before that phase returns failure. `maintenance pipeline` applies the same rule across phases. The final line reports the pipeline result:
-
-```json
-{"type":"summary","status":"fail","suites":8,"failed_phases":["test","integration"]}
-```
-
-`--verbose` keeps the stream valid NDJSON and adds captured output to successful suite objects. Setting `quiet = false` on a suite has the same effect for that suite. Raw subprocess output is never mixed into the JSON stream.
-
-Use native quiet flags as well. For Cargo that usually means `--quiet`. This reduces captured data while the outer reporter still preserves full failure output.
-
-Examples:
-
-```console
-maintenance pipeline | jq -c 'select(.type == "suite" and .status == "fail")'
-maintenance test --list | jq -r '[.suite, .name] | @tsv'
-maintenance pipeline | jq -s 'map(select(.type == "suite")) | group_by(.phase)'
-```
-
-## Combining semantic CI and maintenance
-
-`mkCi` returns a normal maintenance command tree. Add repository-specific commands with an attribute-set merge:
+`mkCi` returns a normal maintenance command tree:
 
 ```nix
 let
   ciCommands = ciLib.mkCi {
-    build.rust = {
-      runtimeInputs = pkgs: [ pkgs.cargo ];
-      exec = "cargo build --workspace --locked --quiet";
-    };
-
-    test.rust = {
-      runtimeInputs = pkgs: [ pkgs.cargo ];
-      exec = "cargo test --workspace --locked --quiet";
-    };
+    build.rust.exec = "cargo build --workspace --quiet";
+    test.rust.exec = "cargo test --workspace --quiet";
   };
 
   maintenance = ciLib.mkMaintenance {
     name = "maintenance";
-    description = "Repository maintenance";
 
     ci.github = {
       enable = true;
@@ -163,86 +175,26 @@ let
 
     commands = ciCommands // {
       check-format = {
-        description = "Check Nix formatting";
         runtimeInputs = pkgs: [ pkgs.nixfmt ];
         exec = "nixfmt --check .";
       };
 
       fix = {
-        description = "Apply deterministic formatting";
         runtimeInputs = pkgs: [ pkgs.nixfmt ];
         exec = "nixfmt .";
       };
     };
   };
-
-  outputs = ciLib.mkMaintenanceOutputs {
-    inherit maintenance;
-    systems = [ system ];
-    pkgsFor = _: pkgs;
-    outputName = "phenix-maintenance";
-  };
 in
-{
-  packages = outputs.packages.${system};
-  apps = outputs.apps.${system};
-}
+maintenance
 ```
 
-GitHub job metadata belongs to the semantic pipeline. Configure it through `mkCi.ci`:
+Generic maintenance commands may still set `ci.enable = true`, `ci.stage`, `ci.needs`, runner, timeout, environment, and display metadata directly.
 
-```nix
-ciCommands = ciLib.mkCi {
-  ci = {
-    name = "Rust";
-    runner = "ubuntu-latest";
-    timeoutMinutes = 60;
-    env.CARGO_TERM_QUIET = "true";
-  };
-
-  build.rust = { ... };
-  test.rust = { ... };
-};
-```
-
-## Generic command graph
-
-`mkMaintenance` still supports arbitrary command trees. Each command can set `ci.enable = true`. `ci.stage` groups enabled commands into GitHub jobs. Runner, timeout, job dependencies, environment, and display names stay beside the command declaration.
-
-A command that invokes another maintenance command must declare that relationship with `dependencies`:
-
-```nix
-commands = {
-  check.rust = {
-    runtimeInputs = pkgs: [ pkgs.cargo ];
-    exec = "cargo check --workspace";
-  };
-
-  rust-ci.clippy = {
-    dependencies = [ [ "check" "rust" ] ];
-    runtimeInputs = pkgs: [ pkgs.cargo pkgs.clippy ];
-    exec = ''
-      maintenance check rust
-      cargo clippy --workspace --all-targets -- -D warnings
-    '';
-  };
-};
-```
-
-A scoped package contains the selected command, descendants that an aggregate command executes, and declared dependencies. Missing dependencies and dependency cycles fail during evaluation. Runtime inputs are deduplicated before package construction.
-
-## Git hooks
-
-Git hooks are disabled unless `gitHooks.enable = true` is declared. `gitHooks.preCommit` is a path into the maintenance command tree, for example `[ "fix" ]` or `[ "check" "format" ]`.
-
-When enabled, `mkMaintenancePackage` exposes a `shellHook`. The installed pre-commit hook executes a package scoped to `gitHooks.preCommit`. The hook re-stages only paths that were staged before maintenance ran, then checks the staged diff.
+A command that invokes another maintenance command must declare that relationship through `dependencies`. Command-scoped packages include only the selected command, its aggregate children, and declared dependencies.
 
 ## Generated GitHub workflow
 
-When `ci.github.enable = true`, the library renders the GitHub Actions workflow from the maintenance graph. Each CI step invokes the command-scoped flake app generated for that command path.
+When `ci.github.enable = true`, the workflow is generated from the maintenance graph. Each CI job invokes a command-scoped flake app with `nix run --quiet`.
 
-Consumers should commit the generated workflow and verify that it stays synchronized. The compatibility dispatcher remains available for development shell use:
-
-```console
-nix run .#phenix-maintenance -- pipeline
-```
+Consumers should commit the generated workflow and keep it synchronized with the Nix declaration.

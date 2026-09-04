@@ -6,6 +6,7 @@
   gateName ? "Maintenance checks",
   checkoutAction ? "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd",
   installNixAction ? "cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c",
+  cacheAction ? "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830",
   clean ? true,
 }:
 let
@@ -38,6 +39,26 @@ let
 
   renderNeedsLines =
     needs: if needs == [ ] then [ ] else [ "    needs:" ] ++ map (need: "      - ${need}") needs;
+
+  renderCacheLines =
+    cache:
+    if cache == null then
+      [ ]
+    else
+      [
+        "      - uses: ${cacheAction} # v4"
+        "        with:"
+        "          path: |"
+      ]
+      ++ map (path: "            ${path}") cache.paths
+      ++ [ "          key: ${yaml cache.key}" ]
+      ++ (
+        if (cache.restoreKeys or [ ]) == [ ] then
+          [ ]
+        else
+          [ "          restore-keys: |" ] ++ map (key: "            ${key}") cache.restoreKeys
+      )
+      ++ [ "" ];
 
   renderStepLines =
     env: command:
@@ -87,6 +108,7 @@ let
       "            max-jobs = auto"
       ""
     ]
+    ++ renderCacheLines (job.cache or null)
     ++ concatLists (map (renderStepLines job.env) job.commands)
     ++ (if clean then renderCleanLines else [ ])
     ++ [ "" ];
