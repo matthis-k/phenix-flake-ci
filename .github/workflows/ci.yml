@@ -41,6 +41,33 @@ jobs:
           nix run --no-write-lock-file "$fixture#dependent" -- dependent
           nix run --no-write-lock-file "$fixture#dispatcher" -- fix
 
+          root_index="$(nix run --quiet --no-write-lock-file "$fixture#dispatcher" -- index)"
+          printf '%s\n' "$root_index" | jq -e '
+            .schemaVersion == 1
+            and .commands.fix.path == ["fix"]
+            and .commands.dependent.dependencies == ["fix"]
+            and .hooks["pre-commit"].command == "fix"
+            and (.commands.fix.execution.program | startswith("/nix/store/"))
+            and .commands.fix.execution.args == ["fix"]
+          ' >/dev/null
+
+          scoped_index="$(nix run --quiet --no-write-lock-file "$fixture#fix" -- index)"
+          printf '%s\n' "$scoped_index" | jq -e '
+            .scope.command == "fix"
+            and .commands.fix.path == ["fix"]
+            and (.commands | has("check") | not)
+            and .hooks == {}
+          ' >/dev/null
+
+          printf '%s\n' '{"command":"fix","source":{"type":"test"}}' |
+            nix run --quiet --no-write-lock-file "$fixture#fix" -- invoke
+
+          if printf '%s\n' '{"command":"check"}' |
+            nix run --quiet --no-write-lock-file "$fixture#fix" -- invoke; then
+            echo "scoped executable invoked a command outside its index" >&2
+            exit 1
+          fi
+
           fix_path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#fix")"
           unrelated_path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#unrelated-tool")"
 

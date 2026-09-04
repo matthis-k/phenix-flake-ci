@@ -21,6 +21,10 @@
       '';
       maintenance = phenix-flake-ci.lib.mkMaintenance {
         name = "maintenance";
+        gitHooks = {
+          enable = true;
+          preCommit = [ "fix" ];
+        };
         commands = {
           fix = {
             runtimeInputs = [ fixTool ];
