@@ -171,36 +171,28 @@ let
           }
 
           resolve_cli_command() {
-            local id=""
-            local candidate
-            local arg
-            local consumed=0
-
-            for arg in "$@"; do
-              if [[ "$arg" == -* ]]; then
-                break
-              fi
-
-              if [[ -n "$id" ]]; then
-                candidate="$id/$arg"
-              else
-                candidate="$arg"
-              fi
-
-              if jq -e --arg id "$candidate" '.commands[$id] != null' "$index_file" >/dev/null; then
-                id="$candidate"
-                ((consumed += 1))
-              else
-                break
-              fi
-            done
-
-            if [[ -z "$id" ]]; then
+            local resolved
+            if ! resolved="$(
+              jq -ner \
+                --slurpfile index "$index_file" \
+                --args '
+                  $index[0] as $index
+                  | $ARGS.positional as $argv
+                  | [
+                      range(1; ($argv | length) + 1) as $consumed
+                      | ($argv[0:$consumed] | join("/")) as $id
+                      | select($index.commands[$id] != null)
+                      | { id: $id, consumed: $consumed }
+                    ]
+                  | last
+                  | "\(.id)\t\(.consumed)"
+                ' \
+                -- "$@"
+            )"; then
               return 1
             fi
 
-            cli_command_id="$id"
-            cli_consumed="$consumed"
+            IFS=$'\t' read -r cli_command_id cli_consumed <<< "$resolved"
           }
 
           case "''${1:-}" in
