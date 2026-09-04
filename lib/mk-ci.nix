@@ -18,6 +18,7 @@ let
     isFunction
     isList
     isString
+    length
     map
     match
     removeAttrs
@@ -64,7 +65,7 @@ let
     if !isAttrs ci then
       fail "mkCi ci must be an attribute set"
     else if builtins.hasAttr "stepName" ci then
-      fail "mkCi ci.stepName is phase-owned"
+      fail "mkCi ci.stepName is pipeline-owned"
     else if builtins.hasAttr "enable" ci then
       fail "mkCi ci.enable is always true"
     else
@@ -122,63 +123,67 @@ let
     else
       map (suiteName: normalizeSuite phase.id suiteName phase.suites.${suiteName}) (attrNames phase.suites);
 
-  renderSuiteFunction =
-    suite:
+  renderSuccess =
+    phaseId: suite:
     let
+      phase = shellQuote phaseId;
+      suiteName = shellQuote suite.suiteName;
       label = shellQuote suite.label;
-      success = "printf 'PASS %s\\n' ${label}";
-      failure = "printf 'FAIL %s\\n' ${label} >&2";
-    in
-    if suite.quiet then
-      ''
-        ${suite.functionId}() {
-          local phenix_ci_log phenix_ci_status
-
-          if [[ "''${PHENIX_CI_VERBOSE:-0}" == "1" ]]; then
-            if (
-              ${suite.exec}
-            ); then
-              ${success}
-              return 0
-            else
-              phenix_ci_status=$?
-              ${failure}
-              return "$phenix_ci_status"
-            fi
-          fi
-
-          phenix_ci_log="$(mktemp)"
-          if (
-            ${suite.exec}
-          ) >"$phenix_ci_log" 2>&1; then
-            ${success}
-            rm -f "$phenix_ci_log"
-            return 0
-          else
-            phenix_ci_status=$?
-            ${failure}
-            cat "$phenix_ci_log" >&2
-            rm -f "$phenix_ci_log"
-            return "$phenix_ci_status"
-          fi
-        }
-      ''
-    else
-      ''
-        ${suite.functionId}() {
-          local phenix_ci_status
-          if (
-            ${suite.exec}
-          ); then
-            ${success}
-            return 0
-          else
-            phenix_ci_status=$?
-            ${failure}
-            return "$phenix_ci_status"
-          fi
-        }
+      withOutput = ''
+        jq -cn \
+          --arg phase ${phase} \
+          --arg suite ${suiteName} \
+          --arg name ${label} \
+          --rawfile output "$phenix_ci_log" \
+          '{type:"suite",phase:$phase,suite:$suite,name:$name,status:"pass",output:$output}'
       '';
+      quietOutput = ''
+        if [[ "''${PHENIX_CI_VERBOSE:-0}" == "1" ]]; then
+          ${withOutput}
+        else
+          jq -cn \
+            --arg phase ${phase} \
+            --arg suite ${suiteName} \
+            --arg name ${label} \
+            '{type:"suite",phase:$phase,suite:$suite,name:$name,status:"pass"}'
+        fi
+      '';
+    in
+    if suite.quiet then quietOutput else withOutput;
+
+  renderSuiteFunction =
+    phaseId: suite:
+    let
+      phase = shellQuote phaseId;
+      suiteName = shellQuote suite.suiteName;
+      label = shellQuote suite.label;
+      success = renderSuccess phaseId suite;
+    in
+    ''
+      ${suite.functionId}() {
+        local phenix_ci_log phenix_ci_status
+
+        phenix_ci_log="$(mktemp)"
+        if (
+          ${suite.exec}
+        ) >"$phenix_ci_log" 2>&1; then
+          ${success}
+          rm -f "$phenix_ci_log"
+          return 0
+        else
+          phenix_ci_status=$?
+          jq -cn \
+            --arg phase ${phase} \
+            --arg suite ${suiteName} \
+            --arg name ${label} \
+            --argjson exit_code "$phenix_ci_status" \
+            --rawfile output "$phenix_ci_log" \
+            '{type:"suite",phase:$phase,suite:$suite,name:$name,status:"fail",exit_code:$exit_code,output:$output}'
+          rm -f "$phenix_ci_log"
+          return "$phenix_ci_status"
+        fi
+      }
+    '';
 
   renderSuiteCase = suite: ''
     ${shellQuote suite.suiteName})
@@ -191,19 +196,27 @@ let
     if ${suite.functionId}; then
       :
     else
-      phenix_ci_failures+=(${shellQuote suite.label})
+      phenix_ci_failures+=(${shellQuote suite.suiteName})
     fi
   '';
+
+  renderListRow =
+    phaseId: suite:
+    ''
+      jq -cn \
+        --arg phase ${shellQuote phaseId} \
+        --arg suite ${shellQuote suite.suiteName} \
+        --arg name ${shellQuote suite.label} \
+        '{type:"suite_definition",phase:$phase,suite:$suite,name:$name}'
+    '';
 
   renderPhaseExec =
     phase: suites:
     let
-      functions = concatStringsSep "\n" (map renderSuiteFunction suites);
+      functions = concatStringsSep "\n" (map (renderSuiteFunction phase.id) suites);
       cases = concatStringsSep "\n" (map renderSuiteCase suites);
       runs = concatStringsSep "\n" (map renderSuiteRun suites);
-      listRows = concatStringsSep "\n" (
-        map (suite: "printf '%-24s %s\\n' ${shellQuote suite.suiteName} ${shellQuote suite.label}") suites
-      );
+      listRows = concatStringsSep "\n" (map (renderListRow phase.id) suites);
     in
     ''
       ${functions}
@@ -222,7 +235,10 @@ let
         case "$1" in
           ${cases}
           *)
-            printf 'Unknown ${phase.id} suite: %s\\n' "$1" >&2
+            jq -cn \
+              --arg phase ${shellQuote phase.id} \
+              --arg suite "$1" \
+              '{type:"error",kind:"unknown_suite",phase:$phase,suite:$suite}'
             return 2
             ;;
         esac
@@ -233,15 +249,16 @@ let
       ${runs}
 
       if (( ''${#phenix_ci_failures[@]} > 0 )); then
-        printf '\\nFAILED %d suite(s):\\n' "''${#phenix_ci_failures[@]}" >&2
-        printf '  %s\\n' "''${phenix_ci_failures[@]}" >&2
         return 1
       fi
     '';
 
   runtimeInputsFor =
     suites: pkgs:
-    [ pkgs.coreutils ]
+    [
+      pkgs.coreutils
+      pkgs.jq
+    ]
     ++ concatLists (
       map (
         suite:
@@ -264,13 +281,11 @@ let
           ++ [
             (phase
               // {
+                inherit suites;
                 command = {
                   inherit (phase) description;
                   runtimeInputs = runtimeInputsFor suites;
                   exec = renderPhaseExec phase suites;
-                  ci = sharedCi // {
-                    stepName = phase.name;
-                  };
                 };
               })
           ]
@@ -285,6 +300,8 @@ let
     }) normalizedPhases
   );
 
+  phaseOrder = map (phase: phase.id) normalizedPhases;
+
   aliases = builtins.listToAttrs (
     map (phase: {
       name = phase.id;
@@ -292,25 +309,74 @@ let
         inherit (phase) description;
         dependencies = [
           [
-            "pipeline"
+            "phases"
             phase.id
           ]
         ];
         exec = ''
-          "$0" pipeline ${phase.id} "$@"
+          "$0" phases ${phase.id} "$@"
         '';
       };
     }) normalizedPhases
   );
+
+  pipelineDependencies = map (phase: [
+    "phases"
+    phase.id
+  ]) normalizedPhases;
+
+  renderPipelineRun = phase: ''
+    if "$0" phases ${phase.id}; then
+      :
+    else
+      phenix_ci_failed_phases+=(${shellQuote phase.id})
+    fi
+  '';
+
+  pipelineRuns = concatStringsSep "\n" (map renderPipelineRun normalizedPhases);
+  suiteCount = foldl' (total: phase: total + length phase.suites) 0 normalizedPhases;
+
+  pipelineExec = ''
+    phenix_ci_failed_phases=()
+
+    ${pipelineRuns}
+
+    if (( ''${#phenix_ci_failed_phases[@]} > 0 )); then
+      phenix_ci_failed_json="$(
+        printf '%s\n' "''${phenix_ci_failed_phases[@]}" |
+          jq -R . |
+          jq -sc .
+      )"
+      jq -cn \
+        --argjson suites ${toString suiteCount} \
+        --argjson failed_phases "$phenix_ci_failed_json" \
+        '{type:"summary",status:"fail",suites:$suites,failed_phases:$failed_phases}'
+      return 1
+    fi
+
+    jq -cn \
+      --argjson suites ${toString suiteCount} \
+      '{type:"summary",status:"pass",suites:$suites}'
+  '';
 in
 if normalizedPhases == [ ] then
   fail "mkCi requires at least one suite"
 else
   aliases
   // {
-    pipeline = {
-      description = "Run semantic CI phases";
-      order = map (phase: phase.id) normalizedPhases;
+    phases = {
+      description = "Run one semantic CI phase";
+      order = phaseOrder;
       commands = phaseCommands;
+    };
+
+    pipeline = {
+      description = "Run every semantic CI phase and report all results";
+      dependencies = pipelineDependencies;
+      runtimeInputs = pkgs: [ pkgs.jq ];
+      exec = pipelineExec;
+      ci = sharedCi // {
+        stepName = "CI";
+      };
     };
   }

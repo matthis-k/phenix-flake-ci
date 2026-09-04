@@ -49,36 +49,55 @@ jobs:
             exit 1
           fi
 
-      - name: Exercise semantic CI suites
+      - name: Exercise semantic CI JSON reporting
         run: |
           set -euo pipefail
           fixture=./tests/semantic-ci-consumer
-
           log="$(mktemp)"
-          if nix run --no-write-lock-file "$fixture#test" -- test >"$log" 2>&1; then
-            echo "semantic test phase unexpectedly succeeded" >&2
+
+          if nix run --quiet --no-write-lock-file "$fixture#pipeline" -- pipeline >"$log"; then
+            echo "semantic pipeline unexpectedly succeeded" >&2
             cat "$log" >&2
             exit 1
           fi
 
-          grep -F "FAIL Failing suite" "$log"
-          grep -F "expected failure detail" "$log"
-          grep -F "PASS Passing suite" "$log"
-          if grep -F "hidden success noise" "$log"; then
-            echo "successful suite output was not quiet" >&2
+          jq -se '
+            all(.[]; type == "object")
+            and any(.[]; .type == "suite" and .phase == "build" and .suite == "compile" and .status == "pass" and (has("output") | not))
+            and any(.[]; .type == "suite" and .phase == "test" and .suite == "a-failure" and .status == "fail" and .exit_code == 7 and (.output | contains("expected failure detail")))
+            and any(.[]; .type == "suite" and .phase == "test" and .suite == "b-success" and .status == "pass" and (has("output") | not))
+            and any(.[]; .type == "suite" and .phase == "runtime" and .suite == "startup" and .status == "pass" and (has("output") | not))
+            and any(.[]; .type == "summary" and .status == "fail" and .failed_phases == ["test"])
+          ' "$log" >/dev/null
+
+          if grep -F "hidden build noise" "$log" || grep -F "hidden success noise" "$log" || grep -F "hidden runtime noise" "$log"; then
+            echo "successful suite output leaked into quiet JSON reporting" >&2
+            cat "$log" >&2
             exit 1
           fi
 
-          nix run --no-write-lock-file "$fixture#test" -- test b-success >"$log" 2>&1
-          grep -F "PASS Passing suite" "$log"
-          if grep -F "Failing suite" "$log"; then
-            echo "single-suite selection ran another suite" >&2
-            exit 1
-          fi
+          nix run --quiet --no-write-lock-file "$fixture#test" -- test b-success >"$log"
+          jq -se '
+            length == 1
+            and .[0].type == "suite"
+            and .[0].phase == "test"
+            and .[0].suite == "b-success"
+            and .[0].status == "pass"
+            and (.[0] | has("output") | not)
+          ' "$log" >/dev/null
 
-          nix run --no-write-lock-file "$fixture#test" -- test --verbose b-success >"$log" 2>&1
-          grep -F "hidden success noise" "$log"
-          grep -F "PASS Passing suite" "$log"
+          nix run --quiet --no-write-lock-file "$fixture#test" -- test --verbose b-success >"$log"
+          jq -se '
+            length == 1
+            and .[0].status == "pass"
+            and (.[0].output | contains("hidden success noise"))
+          ' "$log" >/dev/null
+
+          nix run --quiet --no-write-lock-file "$fixture#test" -- test --list >"$log"
+          jq -se '
+            length == 2
+            and all(.[]; .type == "suite_definition" and .phase == "test")
+          ' "$log" >/dev/null
 
       - name: Evaluate flake
         run: nix flake check --no-build

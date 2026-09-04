@@ -57,7 +57,10 @@ maintenance test
 maintenance runtime
 maintenance integration
 maintenance product
+maintenance pipeline
 ```
+
+`maintenance pipeline` runs every declared phase in order. A failed phase does not stop later phases. The command records the failed phases and returns non-zero only after the complete pipeline has run.
 
 Run one suite by name:
 
@@ -71,7 +74,7 @@ List the suites in a phase:
 maintenance test --list
 ```
 
-Use `--verbose` when the underlying command output is useful:
+Use `--verbose` when successful command output is useful:
 
 ```console
 maintenance test --verbose
@@ -80,34 +83,51 @@ maintenance test --verbose rust
 
 ### One build, later verification
 
-The generated GitHub projection keeps the semantic phases as ordered steps in one job by default:
+Generated GitHub CI invokes the semantic pipeline once on one runner:
 
 ```text
-Build -> Test -> Runtime -> Integration -> Product
+Build -> Test -> Runtime -> Integration -> Product -> final status
 ```
 
-That is deliberate. GitHub jobs use separate runners. Keeping these phases in one job preserves the Nix store and working tree between them, so a later phase can use the exact artifacts produced by `build` instead of reconstructing them on another runner.
+The Nix store, working tree, Cargo home, and Cargo target directory remain available for the whole pipeline. Later phases can reuse artifacts produced by earlier phases.
 
-A normal application stays separate. `nix run .#my-app` builds and runs that app. It does not invoke the semantic CI commands.
+The pipeline owns failure aggregation. GitHub sees one final exit status, so a failure in `build`, `test`, or another phase cannot cause GitHub to skip later semantic phases.
 
-### Suite output
+A normal application stays separate. `nix run .#my-app` builds and runs that app. It does not invoke semantic CI commands.
 
-Suites are quiet by default. Successful process output is discarded. A successful suite prints one line:
+### NDJSON output
 
-```text
-PASS Rust tests
+Semantic CI writes newline-delimited JSON. Each line is one complete JSON object, so agents can stream it through `jq` without parsing prose.
+
+A successful suite is brief:
+
+```json
+{"type":"suite","phase":"test","suite":"rust","name":"Rust tests","status":"pass"}
 ```
 
-A failed suite prints its status and the captured command output:
+Successful command output is captured and discarded by default. A failed suite includes the exit code and captured output:
 
-```text
-FAIL Rust tests
-error: ...
+```json
+{"type":"suite","phase":"test","suite":"rust","name":"Rust tests","status":"fail","exit_code":101,"output":"error: ...\n"}
 ```
 
-All suites in a phase run before the phase returns failure. This gives one concise result per suite while preserving the full error output for failed suites.
+Every suite in a phase runs before that phase returns failure. `maintenance pipeline` applies the same rule across phases. The final line reports the pipeline result:
 
-Use native quiet flags as well. For Cargo that usually means `--quiet`. The outer reporter still captures remaining success noise and exposes failure output consistently across tools.
+```json
+{"type":"summary","status":"fail","suites":8,"failed_phases":["test","integration"]}
+```
+
+`--verbose` keeps the stream valid NDJSON and adds captured output to successful suite objects. Setting `quiet = false` on a suite has the same effect for that suite. Raw subprocess output is never mixed into the JSON stream.
+
+Use native quiet flags as well. For Cargo that usually means `--quiet`. This reduces captured data while the outer reporter still preserves full failure output.
+
+Examples:
+
+```console
+maintenance pipeline | jq -c 'select(.type == "suite" and .status == "fail")'
+maintenance test --list | jq -r '[.suite, .name] | @tsv'
+maintenance pipeline | jq -s 'map(select(.type == "suite")) | group_by(.phase)'
+```
 
 ## Combining semantic CI and maintenance
 
@@ -169,7 +189,7 @@ in
 }
 ```
 
-GitHub job metadata is shared by the semantic phases because they intentionally run on one runner. Configure it through `mkCi.ci`:
+GitHub job metadata belongs to the semantic pipeline. Configure it through `mkCi.ci`:
 
 ```nix
 ciCommands = ciLib.mkCi {
@@ -224,5 +244,5 @@ When `ci.github.enable = true`, the library renders the GitHub Actions workflow 
 Consumers should commit the generated workflow and verify that it stays synchronized. The compatibility dispatcher remains available for development shell use:
 
 ```console
-nix run .#phenix-maintenance -- test
+nix run .#phenix-maintenance -- pipeline
 ```

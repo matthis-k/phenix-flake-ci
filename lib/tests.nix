@@ -89,12 +89,16 @@ let
     };
     ci.timeoutMinutes = 60;
   };
-  semanticTest = semanticCommands.pipeline.commands.test;
+  semanticTest = semanticCommands.phases.commands.test;
   semanticTestScript = builtins.replaceStrings [ "\n" ] [ " " ] semanticTest.exec;
   semanticTestInputs = semanticTest.runtimeInputs {
     coreutils = "coreutils";
+    jq = "jq";
     cargo = "cargo";
   };
+  semanticPipeline = semanticCommands.pipeline;
+  semanticPipelineScript = builtins.replaceStrings [ "\n" ] [ " " ] semanticPipeline.exec;
+  semanticPipelineInputs = semanticPipeline.runtimeInputs { jq = "jq"; };
   semanticRendered = import ./render-maintenance.nix {
     name = "maintenance";
     commands = semanticCommands;
@@ -174,55 +178,65 @@ in
     true;
 
   semanticPipelineIsOrdered =
-    assert semanticCommands.pipeline.order == [
+    assert semanticCommands.phases.order == [
       "build"
       "test"
       "runtime"
     ];
-    assert semanticCommands.pipeline.commands.build.ci.stage == "ci";
-    assert semanticTest.ci.stage == "ci";
-    assert semanticCommands.pipeline.commands.runtime.ci.stage == "ci";
-    assert semanticTest.ci.timeoutMinutes == 60;
-    true;
-
-  semanticPipelineProjectsToOneJob =
-    assert builtins.length semanticRendered.jobs == 1;
-    assert semanticJob.id == "ci";
-    assert builtins.map (command: command.path) semanticJob.commands == [
+    assert semanticPipeline.dependencies == [
       [
-        "pipeline"
+        "phases"
         "build"
       ]
       [
-        "pipeline"
+        "phases"
         "test"
       ]
       [
-        "pipeline"
+        "phases"
         "runtime"
       ]
     ];
+    assert semanticPipeline.ci.stage == "ci";
+    assert semanticPipeline.ci.timeoutMinutes == 60;
+    true;
+
+  semanticPipelineProjectsToOneJobAndOneStep =
+    assert builtins.length semanticRendered.jobs == 1;
+    assert semanticJob.id == "ci";
+    assert builtins.map (command: command.path) semanticJob.commands == [ [ "pipeline" ] ];
     true;
 
   semanticPhasesHaveInteractiveAliases =
     assert semanticCommands.test.dependencies == [
       [
-        "pipeline"
+        "phases"
         "test"
       ]
     ];
-    assert builtins.match ".*pipeline test.*" semanticCommands.test.exec != null;
+    assert builtins.match ".*phases test.*" semanticCommands.test.exec != null;
     true;
 
-  semanticSuitesAreQuietByDefault =
-    assert builtins.match ".*PASS %s.*Rust tests.*" semanticTestScript != null;
-    assert builtins.match ".*FAIL %s.*Rust tests.*" semanticTestScript != null;
+  semanticSuitesEmitJsonAndHideSuccessOutput =
+    assert builtins.match ".*type:\"suite\".*status:\"pass\".*" semanticTestScript != null;
+    assert builtins.match ".*type:\"suite\".*status:\"fail\".*" semanticTestScript != null;
+    assert builtins.match ".*--rawfile output.*" semanticTestScript != null;
     assert builtins.match ".*PHENIX_CI_VERBOSE.*" semanticTestScript != null;
     assert builtins.match ".*cargo test --quiet.*" semanticTestScript != null;
     true;
 
-  semanticPhaseRuntimeInputsAreMerged =
-    assert semanticTestInputs == [ "coreutils" "cargo" ];
+  semanticPipelineCollectsAllPhaseFailures =
+    assert builtins.match ".*phases build.*phases test.*phases runtime.*" semanticPipelineScript != null;
+    assert builtins.match ".*failed_phases.*status:\"fail\".*" semanticPipelineScript != null;
+    true;
+
+  semanticPhaseRuntimeInputsIncludeJsonReporter =
+    assert semanticTestInputs == [
+      "coreutils"
+      "jq"
+      "cargo"
+    ];
+    assert semanticPipelineInputs == [ "jq" ];
     true;
 
   invalidSuiteQuietRejected =
@@ -234,6 +248,6 @@ in
     true;
 
   workflowUsesScopedOutput =
-    assert builtins.match ".*nix run \\.#${fixOutput} -- fix.*" workflowOneLine != null;
+    assert builtins.match ".*nix run --quiet \\.#${fixOutput} -- fix.*" workflowOneLine != null;
     true;
 }

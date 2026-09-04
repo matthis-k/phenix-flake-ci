@@ -37,7 +37,9 @@
         };
         runtime.startup = {
           name = "Runtime startup";
-          exec = "true";
+          exec = ''
+            printf 'hidden runtime noise\n'
+          '';
         };
       };
       maintenance = phenix-flake-ci.lib.mkMaintenance {
@@ -61,6 +63,7 @@
         build = outputs.apps.${system}.${scopedOutput [ "build" ]};
         test = outputs.apps.${system}.${scopedOutput [ "test" ]};
         runtime = outputs.apps.${system}.${scopedOutput [ "runtime" ]};
+        pipeline = outputs.apps.${system}.${scopedOutput [ "pipeline" ]};
       };
     };
 }
