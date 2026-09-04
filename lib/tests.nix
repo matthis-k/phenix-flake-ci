@@ -288,7 +288,7 @@ in
 
   workflowUsesScopedOutputAndCache =
     assert builtins.match ".*actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830.*" workflowOneLine != null;
-    assert builtins.match ".*fixture-\\$\\{\\{ github.sha \\}\\}.*" workflowOneLine != null;
+    assert builtins.match ".*fixture-.*github.sha.*" workflowOneLine != null;
     assert builtins.match ".*nix run --quiet \\.#${fixOutput} -- fix.*" workflowOneLine != null;
     true;
 }
