@@ -1,7 +1,7 @@
 let
-  ciSchemaVersion = 2;
+  ciSchemaVersion = 3;
   mkCi = import ./mk-ci.nix;
-  renderMaintenance = import ./render-maintenance.nix;
+  renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
   normalizeGitHooks = import ./normalize-git-hooks.nix;
   maintenanceCommandGraph = import ./maintenance-command-graph.nix;
@@ -79,7 +79,7 @@ let
     };
 in
 {
-  version = "0.9.0";
+  version = "0.10.0";
   tests = import ./tests.nix;
   inherit
     ciSchemaVersion
