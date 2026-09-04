@@ -354,7 +354,7 @@ let
     ''
       ${shellQuote suite.suiteName})
         shift
-        "$0" jobs ${suite.taskId} "$@"
+        "$0" jobs ${suite.taskId} "''${phenix_ci_verbose_arg[@]}" "$@"
         ;;
     '';
 
