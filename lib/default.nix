@@ -96,8 +96,8 @@ let
     };
 in
 {
-  version = "0.12.0";
-  tests = import ./tests.nix;
+  version = "0.13.0";
+  tests = (import ./tests.nix) // (import ./nix-cache-tests.nix);
   inherit
     ciSchemaVersion
     maintenanceCommandGraph
