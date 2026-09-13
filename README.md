@@ -29,7 +29,7 @@ Dependencies use `needs` with `phase.suite` references:
 ```nix
 ciCommands = ciLib.mkCi {
   build.rust = {
-    name = "Rust workspace";
+    name = "Rust build";
     runtimeInputs = pkgs: [ pkgs.cargo ];
     exec = "cargo build --workspace --locked --quiet";
   };
@@ -99,6 +99,10 @@ ci = {
 The build job restores an older compatible cache when available, produces the current build state, and saves the exact commit key at job completion. Dependent jobs start after the build job and restore that exact state.
 
 Set `cache = false` on suites that do not benefit from the shared cache. This avoids paying transfer cost for independent Nix/package jobs.
+
+## Parallel GitHub groups
+
+GitHub-specific `ci.github.parallelGroups` can render compatible leaf stages as one matrix while keeping one runner per scenario. The generator also emits one stable group summary check for branch protection. See [Parallel GitHub CI groups](docs/parallel-github-ci-groups.md) for the contract and current constraints.
 
 ## JSON execution index
 

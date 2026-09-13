@@ -79,8 +79,8 @@ let
     };
 in
 {
-  version = "0.11.0";
-  tests = import ./tests.nix;
+  version = "0.12.0";
+  tests = (import ./tests.nix) // (import ./github-parallel-groups-tests.nix);
   inherit
     ciSchemaVersion
     maintenanceCommandGraph

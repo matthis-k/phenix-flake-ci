@@ -56,6 +56,7 @@ let
         workflowName = github.workflowName or "CI";
         mainBranch = github.mainBranch or "main";
         gateName = github.gateName or "Maintenance checks";
+        parallelGroups = github.parallelGroups or { };
         clean = github.clean or true;
       }
     else
