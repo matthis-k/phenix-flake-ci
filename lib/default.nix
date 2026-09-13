@@ -32,14 +32,14 @@ let
         let
           root = mkMaintenancePackage {
             pkgs = pkgsFor system;
-            inherit maintenance;
+            inherit maintenance outputName;
           };
           scoped = builtins.map (
             path: {
               inherit path;
               value = mkMaintenancePackage {
                 pkgs = pkgsFor system;
-                inherit maintenance;
+                inherit maintenance outputName;
                 commandPath = path;
               };
             }
@@ -48,7 +48,10 @@ let
         { inherit root scoped; };
 
       perSystem =
-        selector:
+        {
+          selector,
+          includeGitHooks ? false,
+        }:
         builtins.listToAttrs (
           builtins.map (
             system:
@@ -63,23 +66,37 @@ let
                   value = selector entry.value;
                 }) value.scoped
               );
+              hookOutputs =
+                if includeGitHooks && value.root.gitHooksPackage != null then
+                  {
+                    "${outputName}-git-hooks" = value.root.gitHooksPackage;
+                  }
+                else
+                  { };
             in
             {
               name = system;
               value = {
                 ${outputName} = selector value.root;
-              } // scopedOutputs;
+              }
+              // scopedOutputs
+              // hookOutputs;
             }
           ) systems
         );
     in
     {
-      packages = perSystem (value: value.package);
-      apps = perSystem (value: value.app);
+      packages = perSystem {
+        selector = value: value.package;
+        includeGitHooks = true;
+      };
+      apps = perSystem {
+        selector = value: value.app;
+      };
     };
 in
 {
-  version = "0.11.0";
+  version = "0.12.0";
   tests = import ./tests.nix;
   inherit
     ciSchemaVersion

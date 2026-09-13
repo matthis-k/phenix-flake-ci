@@ -23,6 +23,7 @@
         name = "maintenance";
         gitHooks = {
           enable = true;
+          path = ".githooks";
           preCommit = [ "fix" ];
         };
         commands = {
@@ -50,12 +51,17 @@
           };
         };
       };
+      maintenancePackage = phenix-flake-ci.lib.mkMaintenancePackage {
+        inherit pkgs maintenance;
+        outputName = "maintenance";
+      };
       maintenanceOutputs = phenix-flake-ci.lib.mkMaintenanceOutputs {
         inherit maintenance;
         systems = [ system ];
         pkgsFor = _: pkgs;
         outputName = "maintenance";
       };
+      shellHookFile = pkgs.writeText "maintenance-shell-hook" maintenancePackage.shellHook;
       scopedOutput = path:
         phenix-flake-ci.lib.scopeOutputName {
           outputName = "maintenance";
@@ -69,6 +75,8 @@
       packages.${system} = {
         fix = maintenanceOutputs.packages.${system}.${fixOutput};
         dispatcher = maintenanceOutputs.packages.${system}.maintenance;
+        git-hooks = maintenanceOutputs.packages.${system}.maintenance-git-hooks;
+        shell-hook = shellHookFile;
         unrelated-tool = unrelatedTool;
       };
       apps.${system} = {

@@ -61,6 +61,7 @@ let
       {
         "pre-commit" = {
           command = pathId gitHooks.preCommit;
+          path = "${gitHooks.path}/pre-commit";
         };
       }
     else
