@@ -2,6 +2,7 @@
   pkgs,
   maintenance,
   commandPath ? null,
+  outputName ? "phenix-maintenance",
 }:
 let
   inherit (builtins)
@@ -21,6 +22,7 @@ let
   graph = import ./maintenance-command-graph.nix {
     inherit maintenance pkgs;
   };
+  scopeOutputName = import ./scope-output-name.nix;
 
   pathId = path: concatStringsSep "/" path;
   shellQuote = value: "'${replaceStrings [ "'" ] [ "'\"'\"'" ] value}'";
@@ -278,19 +280,16 @@ let
       hook = "pre-commit";
     };
   };
-  hookMaterialized =
-    if maintenance.gitHooks.enabled then
-      materialize maintenance.gitHooks.preCommit (
-        graph.runtimeInputsForPath maintenance.gitHooks.preCommit
-      )
-    else
-      null;
+  hookOutputName = scopeOutputName {
+    inherit outputName;
+    path = maintenance.gitHooks.preCommit;
+  };
 
   gitHooksPackage =
     if maintenance.gitHooks.enabled then
       pkgs.writeTextFile {
         name = "${maintenance.name}-git-hooks";
-        destination = "/pre-commit";
+        destination = "/${maintenance.gitHooks.path}/pre-commit";
         executable = true;
         text = ''
           #!/usr/bin/env bash
@@ -301,16 +300,13 @@ let
 
           mapfile -d $'\0' staged_paths < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
-          if [[ -x ${hookMaterialized.package}/bin/${maintenance.name} ]]; then
-            printf '%s\n' ${shellQuote hookInvocation} |
-              ${hookMaterialized.package}/bin/${maintenance.name} invoke
-          elif command -v nix >/dev/null 2>&1; then
-            printf '%s\n' ${shellQuote hookInvocation} |
-              nix develop --command ${maintenance.name} invoke
-          else
+          if ! command -v nix >/dev/null 2>&1; then
             echo "nix is required to run the configured Phenix pre-commit maintenance" >&2
             exit 1
           fi
+
+          printf '%s\n' ${shellQuote hookInvocation} |
+            nix run --quiet --no-write-lock-file ".#${hookOutputName}" -- invoke
 
           for path in "''${staged_paths[@]}"; do
             if [[ -e "$path" || -L "$path" ]]; then
@@ -324,45 +320,37 @@ let
     else
       null;
 
-  shellHook = ''
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      git_dir="$(git rev-parse --absolute-git-dir)"
-      phenix_hooks_dir="$git_dir/phenix-flake-ci-hooks"
-      current_hooks_path="$(git config --local --get core.hooksPath || true)"
+  gitHooksConfig =
+    if maintenance.gitHooks.enabled then
+      pkgs.writeText "${maintenance.name}-git-hooks-config" ''
+        [core]
+          hooksPath = ${maintenance.gitHooks.path}
+      ''
+    else
+      null;
 
-      ${
-        if maintenance.gitHooks.enabled then
-          ''
-            if [[ "$current_hooks_path" != "$phenix_hooks_dir" ]]; then
-              if [[ -n "$current_hooks_path" ]]; then
-                git config --local phenix-flake-ci.previousHooksPath "$current_hooks_path"
-              else
-                git config --local --unset-all phenix-flake-ci.previousHooksPath || true
-              fi
-            fi
+  shellHook =
+    if maintenance.gitHooks.enabled then
+      ''
+        if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          repo_root="$(git rev-parse --show-toplevel)"
+          git_dir="$(git rev-parse --absolute-git-dir)"
+          current_local_hooks_path="$(git config --local --get core.hooksPath || true)"
 
-            mkdir -p "$phenix_hooks_dir"
-            cp ${gitHooksPackage}/pre-commit "$phenix_hooks_dir/pre-commit"
-            chmod +x "$phenix_hooks_dir/pre-commit"
-            git config --local core.hooksPath "$phenix_hooks_dir"
-          ''
-        else
-          ''
-            if [[ "$current_hooks_path" == "$phenix_hooks_dir" ]]; then
-              previous_hooks_path="$(git config --local --get phenix-flake-ci.previousHooksPath || true)"
-              if [[ -n "$previous_hooks_path" ]]; then
-                git config --local core.hooksPath "$previous_hooks_path"
-              else
-                git config --local --unset-all core.hooksPath || true
-              fi
-            fi
+          if [[ -z "$current_local_hooks_path" ]]; then
+            phenix_git_config_index="''${GIT_CONFIG_COUNT:-0}"
+            export "GIT_CONFIG_KEY_''${phenix_git_config_index}=includeIf.gitdir:$git_dir.path"
+            export "GIT_CONFIG_VALUE_''${phenix_git_config_index}=${gitHooksConfig}"
+            export GIT_CONFIG_COUNT="$((phenix_git_config_index + 1))"
+          fi
 
-            git config --local --unset-all phenix-flake-ci.previousHooksPath || true
-            rm -rf "$phenix_hooks_dir"
-          ''
-      }
-    fi
-  '';
+          if [[ ! -x "$repo_root/${maintenance.gitHooks.path}/pre-commit" ]]; then
+            echo "phenix-flake-ci: expected tracked hook ${maintenance.gitHooks.path}/pre-commit" >&2
+          fi
+        fi
+      ''
+    else
+      "";
 in
 {
   inherit

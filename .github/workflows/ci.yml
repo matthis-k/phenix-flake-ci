@@ -47,6 +47,7 @@ jobs:
             and .commands.fix.path == ["fix"]
             and .commands.dependent.dependencies == ["fix"]
             and .hooks["pre-commit"].command == "fix"
+            and .hooks["pre-commit"].path == ".githooks/pre-commit"
             and (.commands.fix.execution.program | startswith("/nix/store/"))
             and .commands.fix.execution.args == ["fix"]
           ' >/dev/null
@@ -75,6 +76,46 @@ jobs:
             echo "command-scoped fix closure contains unrelated check tooling" >&2
             exit 1
           fi
+
+          hooks_path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#git-hooks")"
+          hook="$hooks_path/.githooks/pre-commit"
+          test -x "$hook"
+          grep -F 'nix run --quiet --no-write-lock-file ".#maintenance-command-' "$hook" >/dev/null
+          grep -F '"command":"fix"' "$hook" >/dev/null
+          if grep -F 'git config --local' "$hook" >/dev/null; then
+            echo "tracked hook adapter mutates repository-local git config" >&2
+            exit 1
+          fi
+
+          shell_hook="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#shell-hook")"
+
+          (
+            repo="$(mktemp -d)"
+            other_repo="$(mktemp -d)"
+            trap 'rm -rf "$repo" "$other_repo"' EXIT
+            git init -q "$repo"
+            git init -q "$other_repo"
+            cd "$repo"
+            unset GIT_CONFIG_COUNT
+            source "$shell_hook"
+
+            test -z "$(git config --local --get core.hooksPath || true)"
+            test "$(git config --get core.hooksPath)" = ".githooks"
+            test -z "$(git -C "$other_repo" config --get core.hooksPath || true)"
+          )
+
+          (
+            repo="$(mktemp -d)"
+            trap 'rm -rf "$repo"' EXIT
+            git init -q "$repo"
+            git -C "$repo" config --local core.hooksPath custom-hooks
+            cd "$repo"
+            unset GIT_CONFIG_COUNT
+            source "$shell_hook"
+
+            test "$(git config --local --get core.hooksPath)" = "custom-hooks"
+            test "$(git config --get core.hooksPath)" = "custom-hooks"
+          )
 
       - name: Exercise semantic CI JSON reporting
         run: |
