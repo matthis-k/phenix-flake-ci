@@ -7,6 +7,8 @@
   checkoutAction ? "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd",
   installNixAction ? "cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c",
   cacheAction ? "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830",
+  cacheRestoreAction ? "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830",
+  cacheSaveAction ? "actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830",
   nixCacheAction ? "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569",
   nixCache ? null,
   clean ? true,
@@ -81,10 +83,27 @@ let
   renderNeedsLines =
     needs: if needs == [ ] then [ ] else [ "    needs:" ] ++ map (need: "      - ${need}") needs;
 
-  renderCacheLines =
+  renderCacheRestoreLines =
     cache:
     if cache == null then
       [ ]
+    else if cache ? save then
+      [
+        "      - name: Restore shared cache"
+        "        id: phenix-cache-restore"
+        "        uses: ${cacheRestoreAction} # v4"
+        "        with:"
+        "          path: |"
+      ]
+      ++ map (path: "            ${path}") cache.paths
+      ++ [ "          key: ${yaml cache.key}" ]
+      ++ (
+        if (cache.restoreKeys or [ ]) == [ ] then
+          [ ]
+        else
+          [ "          restore-keys: |" ] ++ map (key: "            ${key}") cache.restoreKeys
+      )
+      ++ [ "" ]
     else
       [
         "      - uses: ${cacheAction} # v4"
@@ -100,6 +119,24 @@ let
           [ "          restore-keys: |" ] ++ map (key: "            ${key}") cache.restoreKeys
       )
       ++ [ "" ];
+
+  renderCacheSaveLines =
+    cache:
+    if cache == null || !(cache ? save) || !cache.save then
+      [ ]
+    else
+      [
+        "      - name: Save shared cache"
+        "        if: \${{ success() && steps.phenix-cache-restore.outputs.cache-hit != 'true' }}"
+        "        uses: ${cacheSaveAction} # v4"
+        "        with:"
+        "          path: |"
+      ]
+      ++ map (path: "            ${path}") cache.paths
+      ++ [
+        "          key: ${yaml cache.key}"
+        ""
+      ];
 
   renderNixCacheLines =
     job:
@@ -191,9 +228,10 @@ let
       ""
     ]
     ++ renderNixCacheLines job
-    ++ renderCacheLines (job.cache or null)
+    ++ renderCacheRestoreLines (job.cache or null)
     ++ concatLists (map (renderStepLines job) job.commands)
     ++ (if clean then renderCleanLines else [ ])
+    ++ renderCacheSaveLines (job.cache or null)
     ++ [ "" ];
 
   gateNeedLines = map (id: "      - ${id}") jobIds;

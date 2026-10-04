@@ -64,6 +64,7 @@ let
   ];
 
   cache = ci.cache or null;
+  cacheWriter = if cache == null then null else cache.writer or null;
 
   ciValid =
     if !isAttrs ci then
@@ -80,6 +81,8 @@ let
       fail "mkCi ci.cache.paths must be a non-empty list of strings"
     else if cache != null && (!builtins.hasAttr "key" cache || !isString cache.key) then
       fail "mkCi ci.cache.key must be a string"
+    else if cache != null && builtins.hasAttr "writer" cache && !isString cache.writer then
+      fail "mkCi ci.cache.writer must be a `phase.suite` string"
     else if cache != null && builtins.hasAttr "restoreKeys" cache && (!isList cache.restoreKeys || !(builtins.all isString cache.restoreKeys)) then
       fail "mkCi ci.cache.restoreKeys must be a list of strings"
     else
@@ -153,7 +156,35 @@ let
     phases;
 
   allSuites = concatLists (map (phase: phase.suites) normalizedPhases);
+  suiteRefs = map (suite: "${suite.phaseId}.${suite.suiteName}") allSuites;
+  suitesByRef = listToAttrs (map (suite: {
+    name = "${suite.phaseId}.${suite.suiteName}";
+    value = suite;
+  }) allSuites);
   buildRefs = map (suite: "${suite.phaseId}.${suite.suiteName}") (filter (suite: suite.phaseId == "build") allSuites);
+
+  cacheWriterValid =
+    if cacheWriter == null then
+      true
+    else if !(elem cacheWriter suiteRefs) then
+      fail "mkCi ci.cache.writer references unknown suite `${cacheWriter}`"
+    else if !suitesByRef.${cacheWriter}.useCache then
+      fail "mkCi ci.cache.writer `${cacheWriter}` has cache disabled"
+    else
+      true;
+
+  cacheConfig = if cache == null then null else builtins.removeAttrs cache [ "writer" ];
+  cacheForSuite =
+    suite:
+    if !suite.useCache || cacheConfig == null then
+      null
+    else if cacheWriter == null then
+      cacheConfig
+    else
+      cacheConfig
+      // {
+        save = cacheWriter == "${suite.phaseId}.${suite.suiteName}";
+      };
 
   parseNeed =
     raw:
@@ -330,7 +361,7 @@ let
           timeoutMinutes = globalTimeout;
           needs = globalNeeds ++ map (need: need.taskId) suite.needs;
           env = globalEnv;
-          cache = if suite.useCache then cache else null;
+          cache = cacheForSuite suite;
         };
       };
     }
@@ -463,6 +494,7 @@ let
   '';
 in
 assert ciValid;
+assert cacheWriterValid;
 assert needsValid;
 assert acyclic;
 if normalizedPhases == [ ] then

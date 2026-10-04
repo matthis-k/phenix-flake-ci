@@ -98,6 +98,7 @@ let
         ];
         key = "rust-\${{ runner.os }}-\${{ github.sha }}";
         restoreKeys = [ "rust-\${{ runner.os }}-" ];
+        writer = "build.compile";
       };
     };
   };
@@ -158,6 +159,29 @@ let
       };
     }) true
   );
+  unknownCacheWriter = builtins.tryEval (
+    builtins.deepSeq (mkCi {
+      test.good.exec = "true";
+      ci.cache = {
+        paths = [ "/tmp/cache" ];
+        key = "fixture";
+        writer = "test.missing";
+      };
+    }) true
+  );
+  disabledCacheWriter = builtins.tryEval (
+    builtins.deepSeq (mkCi {
+      test.writer = {
+        cache = false;
+        exec = "true";
+      };
+      ci.cache = {
+        paths = [ "/tmp/cache" ];
+        key = "fixture";
+        writer = "test.writer";
+      };
+    }) true
+  );
 
   scopeOutputName = import ./scope-output-name.nix;
   outputName = "phenix-maintenance";
@@ -192,6 +216,15 @@ let
     ];
   };
   workflowOneLine = builtins.replaceStrings [ "\n" ] [ " " ] workflow;
+  ownedCacheWorkflow = import ./render-github-workflow.nix {
+    inherit outputName;
+    clean = false;
+    jobs = [
+      renderedBuild
+      renderedTest
+    ];
+  };
+  ownedCacheOneLine = builtins.replaceStrings [ "\n" ] [ " " ] ownedCacheWorkflow;
 in
 {
   leafClosureIsScoped =
@@ -241,11 +274,19 @@ in
 
   semanticCacheCanBeSharedOrSkipped =
     assert renderedBuild.cache.key == "rust-\${{ runner.os }}-\${{ github.sha }}";
+    assert renderedBuild.cache.save;
     assert renderedTest.cache.paths == [
       "\${{ runner.temp }}/cargo-home"
       "\${{ runner.temp }}/cargo-target"
     ];
+    assert !renderedTest.cache.save;
     assert renderedRuntime.cache == null;
+    true;
+
+  semanticCacheWriterRendersRestoreAndSingleSave =
+    assert builtins.match ".*actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830.*" ownedCacheOneLine != null;
+    assert builtins.match ".*actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830.*" ownedCacheOneLine != null;
+    assert builtins.match ".*steps.phenix-cache-restore.outputs.cache-hit.*" ownedCacheOneLine != null;
     true;
 
   semanticSuitesEmitJsonAndHideSuccessOutput =
@@ -284,6 +325,14 @@ in
 
   semanticDependencyCycleRejected =
     assert !cyclicSemanticNeed.success;
+    true;
+
+  unknownSemanticCacheWriterRejected =
+    assert !unknownCacheWriter.success;
+    true;
+
+  disabledSemanticCacheWriterRejected =
+    assert !disabledCacheWriter.success;
     true;
 
   workflowUsesScopedOutputCacheAndJsonInvocation =
