@@ -92,11 +92,14 @@ ci = {
     ];
     key = "rust-\${{ runner.os }}-\${{ github.sha }}";
     restoreKeys = [ "rust-\${{ runner.os }}-" ];
+    writer = "build.rust";
   };
 };
 ```
 
-The build job restores an older compatible cache when available, produces the current build state, and saves the exact commit key at job completion. Dependent jobs start after the build job and restore that exact state.
+The optional `writer` names one semantic suite that owns saves for the shared key. Every cache-enabled suite restores the cache, but only the writer saves it. This avoids concurrent save races when independent jobs use the same cache.
+
+A dependent suite can wait for the writer when it needs same-run build state. Independent suites can keep `needs = [ ]` and restore the newest compatible cache from an earlier run instead.
 
 Set `cache = false` on suites that do not benefit from the shared cache. This avoids paying transfer cost for independent Nix/package jobs.
 

@@ -96,7 +96,7 @@ let
     };
 in
 {
-  version = "0.13.0";
+  version = "0.14.0";
   tests = (import ./tests.nix) // (import ./nix-cache-tests.nix);
   inherit
     ciSchemaVersion
