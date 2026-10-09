@@ -142,7 +142,7 @@ let
     else
       [
         "      - name: Save shared cache"
-        "        if: \${{ success() && steps.phenix-cache-restore.outputs.cache-hit != 'true'" + (if cache.saveOnDefaultBranch or false then " && github.ref == 'refs/heads/${mainBranch}'" else "") + " }}"
+        ("        if: \${{ success() && steps.phenix-cache-restore.outputs.cache-hit != 'true'" + (if cache.saveOnDefaultBranch or false then " && github.ref == 'refs/heads/${mainBranch}'" else "") + " }}")
         "        uses: ${cacheSaveAction} # v4"
         "        with:"
         "          path: |"
