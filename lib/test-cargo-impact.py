@@ -106,6 +106,36 @@ class ImpactTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 self.assertFalse(self.lock_is_scoped(manifests, old, changed))
 
+    def test_workspace_member_additions_require_changed_member_manifests(self):
+        old = {
+            "workspace": {
+                "members": ["crates/leaf", "crates/sdk"],
+                "resolver": "3",
+            },
+            "profile": {"release": {"opt-level": 3}},
+        }
+        new = {
+            "workspace": {
+                "members": ["crates/leaf", "crates/sdk", "crates/other"],
+                "resolver": "3",
+            },
+            "profile": {"release": {"opt-level": 3}},
+        }
+        self.assertTrue(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, new,
+        ))
+        self.assertFalse(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml"], old, new,
+        ))
+        removed = {**new, "workspace": {**new["workspace"], "members": ["crates/sdk"]}}
+        self.assertFalse(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, removed,
+        ))
+        changed_profile = {**new, "profile": {"release": {"opt-level": 2}}}
+        self.assertFalse(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, changed_profile,
+        ))
+
     def test_leaf_edit_runs_reverse_dependents_not_unrelated(self):
         jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
         self.assertEqual(crates, ["app", "leaf", "sdk"])
