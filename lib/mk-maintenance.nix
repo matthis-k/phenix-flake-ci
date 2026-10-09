@@ -57,6 +57,7 @@ let
         mainBranch = github.mainBranch or "main";
         gateName = github.gateName or "Maintenance checks";
         nixCache = github.nixCache or null;
+        pullRequestJobs = github.pullRequestJobs or null;
         clean = github.clean or true;
       }
     else

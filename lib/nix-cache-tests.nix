@@ -49,6 +49,37 @@ let
   };
   oneLine = builtins.replaceStrings [ "\n" ] [ " " ] workflow;
 
+  scopedWorkflow = renderGithubWorkflow {
+    inherit jobs;
+    clean = false;
+    mainBranch = "release";
+    pullRequestJobs = [ "cached" ];
+    nixCache = {
+      enable = true;
+      jobs = [ "cached" ];
+      primaryKey = "nix-fixture";
+      saveOnDefaultBranch = true;
+    };
+  };
+  scopedOneLine = builtins.replaceStrings [ "\n" ] [ " " ] scopedWorkflow;
+  unknownPullRequestJob = builtins.tryEval (builtins.deepSeq (renderGithubWorkflow {
+    inherit jobs;
+    pullRequestJobs = [ "missing" ];
+  }) true);
+  missingPullRequestDependency = builtins.tryEval (builtins.deepSeq (renderGithubWorkflow {
+    jobs = builtins.map (job: if job.id == "plain" then job // { needs = [ "cached" ]; } else job) jobs;
+    pullRequestJobs = [ "plain" ];
+  }) true);
+  invalidNixSavePolicy = builtins.tryEval (builtins.deepSeq (renderGithubWorkflow {
+    inherit jobs;
+    nixCache = {
+      enable = true;
+      jobs = [ "cached" ];
+      primaryKey = "nix-fixture";
+      saveOnDefaultBranch = "yes";
+    };
+  }) true);
+
   invalidJob = builtins.tryEval (
     builtins.deepSeq (renderGithubWorkflow {
       inherit jobs;
@@ -67,6 +98,18 @@ in
     assert builtins.match ".*primary-key:.*nix-.*runner.os.*github.job.*fixture.*" oneLine != null;
     assert builtins.match ".*restore-prefixes-first-match:.*nix-.*runner.os.*github.job.*" oneLine != null;
     assert builtins.match ".*gc-max-store-size-linux:.*2G.*" oneLine != null;
+    true;
+
+  githubNixCacheSavesOnlyOnDefaultBranch =
+    assert builtins.match ".*save:.*github.ref == 'refs/heads/release'.*" scopedOneLine != null;
+    assert builtins.match ".*if: github.event_name != 'pull_request'.*" scopedOneLine != null;
+    assert builtins.match ".*github.event_name.*skipped.*" scopedOneLine != null;
+    true;
+
+  githubPullRequestSelectionValidatesDependencyClosure =
+    assert !unknownPullRequestJob.success;
+    assert !missingPullRequestDependency.success;
+    assert !invalidNixSavePolicy.success;
     true;
 
   githubNixCacheRejectsUnknownJobs =

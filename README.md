@@ -90,9 +90,10 @@ ci = {
       "\${{ runner.temp }}/cargo-home"
       "\${{ runner.temp }}/cargo-target"
     ];
-    key = "rust-\${{ runner.os }}-\${{ github.sha }}";
-    restoreKeys = [ "rust-\${{ runner.os }}-" ];
+    key = "rust-v2-\${{ runner.os }}-\${{ hashFiles('rust/Cargo.lock', 'flake.lock') }}";
+    restoreKeys = [ "rust-v2-\${{ runner.os }}-" ];
     writer = "build.rust";
+    saveOnDefaultBranch = true;
   };
 };
 ```
@@ -100,6 +101,12 @@ ci = {
 The optional `writer` names one semantic suite that owns saves for the shared key. Every cache-enabled suite restores the cache, but only the writer saves it. This avoids concurrent save races when independent jobs use the same cache.
 
 A dependent suite can wait for the writer when it needs same-run build state. Independent suites can keep `needs = [ ]` and restore the newest compatible cache from an earlier run instead.
+
+`saveOnDefaultBranch = true` lets only the default branch write the cache while pull requests restore it. It prevents large, branch-scoped caches from crowding out the main cache. The key should represent the toolchain and dependency inputs, not `github.sha`, to avoid a new archive for every commit. Cargo still checks fingerprints and recompiles changed sources after restoring a dependency cache. The default is unchanged for existing consumers.
+
+For the Nix store, set `ci.github.nixCache.saveOnDefaultBranch = true`. The generator emits the pinned cache action with a conditional `save` input. The restore step remains available to pull requests.
+
+Set `ci.github.pullRequestJobs = [ "source" "clippy" ];` to run only those CI stages on pull requests. Main pushes and manual `workflow_dispatch` runs execute the full suite. The generated final gate treats excluded PR jobs as intentionally skipped, while still requiring success from selected jobs. Selected jobs must include their upstream `needs` dependencies. Without `pullRequestJobs`, all jobs run on PRs as before.
 
 Set `cache = false` on suites that do not benefit from the shared cache. This avoids paying transfer cost for independent Nix/package jobs.
 
