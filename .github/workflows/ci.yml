@@ -31,6 +31,10 @@ jobs:
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
 
+      - name: Print exact consumer flake source identity
+        if: github.ref == 'refs/heads/main'
+        run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"
+
       - name: Evaluate library tests
         run: nix eval --json .#lib.tests
 
