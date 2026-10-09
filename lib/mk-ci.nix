@@ -83,6 +83,8 @@ let
       fail "mkCi ci.cache.key must be a string"
     else if cache != null && builtins.hasAttr "writer" cache && !isString cache.writer then
       fail "mkCi ci.cache.writer must be a `phase.suite` string"
+    else if cache != null && builtins.hasAttr "saveOnDefaultBranch" cache && !isBool cache.saveOnDefaultBranch then
+      fail "mkCi ci.cache.saveOnDefaultBranch must be a boolean"
     else if cache != null && builtins.hasAttr "restoreKeys" cache && (!isList cache.restoreKeys || !(builtins.all isString cache.restoreKeys)) then
       fail "mkCi ci.cache.restoreKeys must be a list of strings"
     else
