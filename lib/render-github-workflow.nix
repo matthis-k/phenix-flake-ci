@@ -12,6 +12,7 @@
   nixCacheAction ? "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569",
   nixCache ? null,
   pullRequestJobs ? null,
+  prImpact ? null,
   clean ? true,
 }:
 let
@@ -26,6 +27,8 @@ let
     isString
     map
     match
+    filter
+    listToAttrs
     replaceStrings
     toJSON
     ;
@@ -41,6 +44,26 @@ let
   jobIds = map (job: job.id) jobs;
   nixCacheEnabled = nixCache != null && (nixCache.enable or false);
   nixCacheJobs = if nixCache == null then [ ] else nixCache.jobs or [ ];
+  impactEnabled = prImpact != null && (prImpact.enable or false);
+  impactedJobs = filter (job: (job.impact or null) != null && (pullRequestJobs == null || elem job.id pullRequestJobs)) jobs;
+  impactConfig = {
+    workspace = prImpact.workspace or "rust";
+    jobs = listToAttrs (map (job: { name = job.id; value = job.impact; }) impactedJobs);
+  };
+  impactValid =
+    if prImpact == null then true
+    else if !isAttrs prImpact || !(isBool (prImpact.enable or false)) then
+      fail "GitHub prImpact must be an attribute set with boolean enable"
+    else if !impactEnabled then true
+    else if !isString (prImpact.workspace or null) || (prImpact.workspace or "") == "" then
+      fail "GitHub prImpact.workspace must be a non-empty Cargo workspace path"
+    else if !(builtins.all (job:
+      let rule = job.impact; in
+      isAttrs rule && (rule.kind or null) == "cargo"
+      && ((rule.packages or null) == null || (isList rule.packages && builtins.all isString rule.packages))
+    ) impactedJobs) then
+      fail "GitHub impacted jobs must declare Cargo package targets"
+    else true;
   pullRequestJobsValid =
     if pullRequestJobs == null then
       true
@@ -225,11 +248,47 @@ let
     ""
   ];
 
+  renderImpactJobLines =
+    if !impactEnabled then
+      [ ]
+    else
+      [
+        "  impact:"
+        "    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false"
+        "    name: Dependency impact plan"
+        "    runs-on: ubuntu-latest"
+        "    outputs:"
+        "      jobs: \${ steps.select.outputs.jobs }"
+        "    steps:"
+        "      - uses: ${checkoutAction} # v5"
+        "        with:"
+        "          fetch-depth: 0"
+        ""
+        "      - name: Plan affected checks"
+        "        id: select"
+        "        env:"
+        "          GITHUB_BASE_REF: \${ github.base_ref }"
+        "          PHENIX_IMPACT_CONFIG: ${yaml (toJSON impactConfig)}"
+        "        run: |"
+        "          set -euo pipefail"
+        "          python3 - <<'PY'"
+        ("          " + replaceStrings [ "\n" ] [ "\n          " ] (builtins.readFile ./cargo-impact.py))
+        "          PY"
+        ""
+      ];
+
   renderJobLines =
     job:
+    let
+      affected = impactEnabled && (job.impact or null) != null && (pullRequestJobs == null || elem job.id pullRequestJobs);
+      upstreamReady = concatStringsSep " && " (map (id: "needs.${id}.result == 'success'") job.needs);
+      baseReady = if job.needs == [ ] then "true" else upstreamReady;
+    in
     [
       "  ${job.id}:"
-      (if pullRequestJobs == null || elem job.id pullRequestJobs then
+      (if affected then
+        "    if: always() && (github.event_name != 'pull_request' && ${baseReady} || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.result == 'success' && ${baseReady} && fromJSON(needs.impact.outputs.jobs || '{}')['${job.id}'] == true))"
+      else if pullRequestJobs == null || elem job.id pullRequestJobs then
         "    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false"
       else
         "    if: github.event_name != 'pull_request'")
@@ -237,7 +296,7 @@ let
       "    runs-on: ${yaml job.runner}"
       "    timeout-minutes: ${toString job.timeout}"
     ]
-    ++ renderNeedsLines job.needs
+    ++ renderNeedsLines (job.needs ++ (if affected then [ "impact" ] else [ ]))
     ++ [
       "    steps:"
       "      - uses: ${checkoutAction} # v5"
@@ -258,14 +317,19 @@ let
     ++ renderCacheSaveLines (job.cache or null)
     ++ [ "" ];
 
-  gateNeedLines = map (id: "      - ${id}") jobIds;
-  gateTestLines = map (
-    id:
-    if pullRequestJobs != null && !(elem id pullRequestJobs) then
-      "          [[ '\${{ needs.${id}.result }}' == success || ( '\${{ github.event_name }}' == pull_request && '\${{ needs.${id}.result }}' == skipped ) ]]"
-    else
-      "          [[ '\${{ needs.${id}.result }}' == success ]]"
-  ) jobIds;
+  gateNeedLines = (if impactEnabled then [ "      - impact" ] else [ ]) ++ map (id: "      - ${id}") jobIds;
+  gateTestLines =
+    (if impactEnabled then [ "          [[ '\${ github.event_name }}' != pull_request || '\${ needs.impact.result }}' == success ]]" ] else [ ])
+    ++ map (
+      id:
+      let affected = impactEnabled && builtins.any (job: job.id == id) impactedJobs; in
+      if pullRequestJobs != null && !(elem id pullRequestJobs) then
+        "          [[ '\${ needs.${id}.result }}' == success || ( '\${ github.event_name }}' == pull_request && '\${ needs.${id}.result }}' == skipped ) ]]"
+      else if affected then
+        "          [[ '\${ needs.${id}.result }}' == success || ( '\${ github.event_name }}' == pull_request && '\${ needs.impact.result }}' == success && '\${ fromJSON(needs.impact.outputs.jobs || '{}')['${id}'] }}' == false && '\${ needs.${id}.result }}' == skipped ) ]]"
+      else
+        "          [[ '\${ needs.${id}.result }}' == success ]]"
+    ) jobIds;
 
   workflowLines = [
     "# Generated by phenix-flake-ci. Edit the Nix maintenance declaration, not this file."
@@ -287,6 +351,7 @@ let
     ""
     "jobs:"
   ]
+  ++ renderImpactJobLines
   ++ concatLists (map renderJobLines jobs)
   ++ [
     "  checks:"
@@ -306,6 +371,7 @@ let
 in
 assert nixCacheValid;
 assert pullRequestJobsValid;
+assert impactValid;
 if !validOutputName then
   fail "GitHub outputName must be a simple flake output identifier"
 else if jobs == [ ] then

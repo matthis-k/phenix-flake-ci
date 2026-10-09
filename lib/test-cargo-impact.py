@@ -1,0 +1,75 @@
+"""Portable regression tests for the Cargo impact planner (no Cargo download)."""
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import importlib.util
+
+module = importlib.util.spec_from_file_location("impact", Path(__file__).with_name("cargo-impact.py"))
+impact = importlib.util.module_from_spec(module)
+module.loader.exec_module(impact)
+
+
+class ImpactTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.metadata = {
+            "workspace_members": ["leaf", "sdk", "app", "other"],
+            "packages": [
+                {"id": "leaf", "name": "leaf", "manifest_path": str(self.root / "rust/crates/leaf/Cargo.toml"), "dependencies": []},
+                {"id": "sdk", "name": "sdk", "manifest_path": str(self.root / "rust/crates/sdk/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/leaf")}]},
+                {"id": "app", "name": "app", "manifest_path": str(self.root / "rust/crates/app/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/sdk")}]},
+                {"id": "other", "name": "other", "manifest_path": str(self.root / "rust/crates/other/Cargo.toml"), "dependencies": []},
+            ],
+        }
+        self.config = {"workspace": "rust", "jobs": {
+            "test-leaf": {"kind": "cargo", "packages": ["leaf"]},
+            "test-app": {"kind": "cargo", "packages": ["app"]},
+            "test-other": {"kind": "cargo", "packages": ["other"]},
+            "clippy": {"kind": "cargo", "packages": None},
+        }}
+
+    def at_repo(self, filenames):
+        old = Path.cwd()
+        import os
+        os.chdir(self.root)
+        try:
+            return impact.select_jobs(self.config, filenames, self.metadata)
+        finally:
+            os.chdir(old)
+
+    def test_leaf_edit_runs_reverse_dependents_not_unrelated(self):
+        jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
+        self.assertEqual(crates, ["app", "leaf", "sdk"])
+        self.assertEqual(jobs, {"test-leaf": True, "test-app": True, "test-other": False, "clippy": True})
+
+    def test_unrelated_crate_does_not_rebuild_other_crates(self):
+        jobs, crates = self.at_repo(["rust/crates/other/src/lib.rs"])
+        self.assertEqual(crates, ["other"])
+        self.assertEqual(jobs, {"test-leaf": False, "test-app": False, "test-other": True, "clippy": True})
+
+    def test_docs_only_disables_cargo_checks(self):
+        jobs, crates = self.at_repo(["spec/rfc.md", "README.md"])
+        self.assertEqual(crates, [])
+        self.assertTrue(all(not active for active in jobs.values()))
+
+    def test_shared_manifest_or_unknown_path_must_fail_open(self):
+        for name in ["rust/Cargo.lock", "rust/Cargo.toml", "modules/development.nix", "rust/.cargo/config.toml", "rust/crates/missing/src/lib.rs", ".github/workflows/ci.yml"]:
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self.at_repo([name])
+
+    def test_invalid_declared_target_rejects_plan(self):
+        self.config["jobs"]["test-leaf"]["packages"] = ["misnamed"]
+        with self.assertRaises(ValueError):
+            self.at_repo(["rust/crates/leaf/src/lib.rs"])
+
+    def test_empty_diff_rejects_plan(self):
+        with self.assertRaises(ValueError):
+            self.at_repo([])
+
+
+if __name__ == "__main__":
+    unittest.main()
