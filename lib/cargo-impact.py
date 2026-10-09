@@ -115,12 +115,18 @@ def main():
         print("Impact analysis uncertain; selecting all configured jobs: " + str(error),
               file=sys.stderr)
         selected = {name: True for name in config["jobs"]}
+        crates = None
     encoded = json.dumps(selected, sort_keys=True, separators=(",", ":"))
+    # null means uncertain: the consumer must retain its full-workspace fallback.
+    # [] is a verified documentation-only change.
+    packages = json.dumps(crates, separators=(",", ":"))
     print("Selected PR jobs:", encoded)
+    print("Affected PR packages:", packages)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as stream:
             stream.write("jobs=" + encoded + "\n")
+            stream.write("packages=" + packages + "\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:

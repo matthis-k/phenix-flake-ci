@@ -259,6 +259,7 @@ let
         "    runs-on: ubuntu-latest"
         "    outputs:"
         "      jobs: \${{ steps.select.outputs.jobs }}"
+        "      packages: \${{ steps.select.outputs.packages }}"
         "    steps:"
         "      - uses: ${checkoutAction} # v5"
         "        with:"
@@ -298,6 +299,13 @@ let
       "    runs-on: ${yaml job.runner}"
       "    timeout-minutes: ${toString job.timeout}"
     ]
+    ++ (if affected then
+      [
+        "    env:"
+        "      PHENIX_IMPACT_PACKAGES: \${{ needs.impact.outputs.packages }}"
+      ]
+    else
+      [ ])
     ++ renderNeedsLines (job.needs ++ (if affected then [ "impact" ] else [ ]))
     ++ [
       "    steps:"

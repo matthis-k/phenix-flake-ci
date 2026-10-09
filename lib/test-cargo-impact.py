@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 import importlib.util
 
 module = importlib.util.spec_from_file_location("impact", Path(__file__).with_name("cargo-impact.py"))
@@ -115,6 +116,24 @@ class ImpactTests(unittest.TestCase):
         jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
         self.assertEqual(crates, ["app", "leaf", "other", "sdk"])
         self.assertTrue(jobs["test-other"])
+
+    def test_output_has_packages_and_unknown_plan_uses_null(self):
+        output = self.root / "github-output"
+        environment = {
+            "PHENIX_IMPACT_CONFIG": json.dumps(self.config),
+            "GITHUB_OUTPUT": str(output),
+        }
+        with mock.patch.dict("os.environ", environment):
+            with mock.patch.object(impact, "run", return_value=(
+                {"test-leaf": True}, ["rust/crates/leaf/src/lib.rs"], ["leaf", "sdk"]
+            )):
+                impact.main()
+            self.assertIn("packages=" + json.dumps(["leaf", "sdk"], separators=(",", ":")) + "\n", output.read_text())
+            output.unlink()
+            with mock.patch.object(impact, "run", side_effect=ValueError("unknown build input")):
+                impact.main()
+        self.assertIn("packages=null\n", output.read_text())
+        self.assertIn("clippy", output.read_text())
 
     def test_invalid_declared_target_rejects_plan(self):
         self.config["jobs"]["test-leaf"]["packages"] = ["misnamed"]
