@@ -52,6 +52,41 @@ def workspace_only_lock_changes(config, changed, metadata, old_lock, new_lock):
     return True
 
 
+def workspace_member_only_change(config, changed, old_manifest, new_manifest):
+    """Accept adding workspace members only when their own manifests are in the diff.
+
+    All workspace dependency, profile, patch, resolver and feature changes are
+    shared compiler inputs and continue to invalidate the full CI selection.
+    """
+    old = dict(old_manifest)
+    new = dict(new_manifest)
+    old_workspace = dict(old.pop("workspace", {}))
+    new_workspace = dict(new.pop("workspace", {}))
+    if old != new:
+        return False
+    previous_members = old_workspace.pop("members", None)
+    next_members = new_workspace.pop("members", None)
+    if old_workspace != new_workspace:
+        return False
+    if not isinstance(previous_members, list) or not isinstance(next_members, list):
+        return False
+    if len(previous_members) != len(set(previous_members)) or len(next_members) != len(set(next_members)):
+        return False
+    old_set, new_set = set(previous_members), set(next_members)
+    # Removing or globbing workspace members has too many invalidation paths
+    # to infer from current Cargo metadata alone.
+    if not old_set <= new_set:
+        return False
+    for member in new_set - old_set:
+        parts = Path(member).parts
+        if len(parts) != 2 or parts[0] != "crates" or parts[1] in (".", ".."):
+            return False
+        manifest = config["workspace"].rstrip("/") + "/" + member + "/Cargo.toml"
+        if manifest not in changed:
+            return False
+    return True
+
+
 def cargo_closure(metadata, changed):
     """Changed workspace crates plus all reverse path-dependency consumers."""
     workspace = set(metadata["workspace_members"])
@@ -142,21 +177,31 @@ def run():
          "--manifest-path", config["workspace"].rstrip("/") + "/Cargo.toml"],
         text=True,
     ))
-    lock_path = config["workspace"].rstrip("/") + "/Cargo.lock"
-    if lock_path in changed:
-        # Use the same merge base as the filename diff. Comparing against the
-        # latest base tip could mistake unrelated newer commits for this PR.
+    workspace = config["workspace"].rstrip("/")
+    lock_path = workspace + "/Cargo.lock"
+    manifest_path = workspace + "/Cargo.toml"
+    if lock_path in changed or manifest_path in changed:
+        # Diff against the exact merge-base commit, not the later base tip.
         base_revision = subprocess.check_output(
             ["git", "merge-base", "refs/remotes/origin/" + base, "HEAD"],
             text=True,
         ).strip()
-        previous = tomllib.loads(subprocess.check_output(
-            ["git", "show", base_revision + ":" + lock_path], text=True,
-        ))
-        current = tomllib.loads(Path(lock_path).read_text(encoding="utf-8"))
-        if workspace_only_lock_changes(config, changed, metadata, previous, current):
+        def previous_toml(path):
+            return tomllib.loads(subprocess.check_output(
+                ["git", "show", base_revision + ":" + path], text=True,
+            ))
+        if lock_path in changed and workspace_only_lock_changes(
+            config, changed, metadata, previous_toml(lock_path),
+            tomllib.loads(Path(lock_path).read_text(encoding="utf-8")),
+        ):
             print("Verified workspace-only Cargo.lock changes; deriving impact from changed manifests")
             changed.remove(lock_path)
+        if manifest_path in changed and workspace_member_only_change(
+            config, changed, previous_toml(manifest_path),
+            tomllib.loads(Path(manifest_path).read_text(encoding="utf-8")),
+        ):
+            print("Verified Cargo workspace member additions; deriving impact from added crate manifests")
+            changed.remove(manifest_path)
     selected, crates = select_jobs(config, changed, metadata)
     return selected, changed, crates
 
