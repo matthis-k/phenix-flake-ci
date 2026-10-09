@@ -258,7 +258,7 @@ let
         "    name: Dependency impact plan"
         "    runs-on: ubuntu-latest"
         "    outputs:"
-        "      jobs: \${ steps.select.outputs.jobs }"
+        "      jobs: \${{ steps.select.outputs.jobs }}"
         "    steps:"
         "      - uses: ${checkoutAction} # v5"
         "        with:"
@@ -267,7 +267,7 @@ let
         "      - name: Plan affected checks"
         "        id: select"
         "        env:"
-        "          GITHUB_BASE_REF: \${ github.base_ref }"
+        "          GITHUB_BASE_REF: \${{ github.base_ref }}"
         "          PHENIX_IMPACT_CONFIG: ${yaml (toJSON impactConfig)}"
         "        run: |"
         "          set -euo pipefail"
@@ -319,16 +319,16 @@ let
 
   gateNeedLines = (if impactEnabled then [ "      - impact" ] else [ ]) ++ map (id: "      - ${id}") jobIds;
   gateTestLines =
-    (if impactEnabled then [ "          [[ '\${ github.event_name }}' != pull_request || '\${ needs.impact.result }}' == success ]]" ] else [ ])
+    (if impactEnabled then [ "          [[ '\${{ github.event_name }}' != pull_request || '\${{ needs.impact.result }}' == success ]]" ] else [ ])
     ++ map (
       id:
       let affected = impactEnabled && builtins.any (job: job.id == id) impactedJobs; in
       if pullRequestJobs != null && !(elem id pullRequestJobs) then
-        "          [[ '\${ needs.${id}.result }}' == success || ( '\${ github.event_name }}' == pull_request && '\${ needs.${id}.result }}' == skipped ) ]]"
+        "          [[ '\${{ needs.${id}.result }}' == success || ( '\${{ github.event_name }}' == pull_request && '\${{ needs.${id}.result }}' == skipped ) ]]"
       else if affected then
-        "          [[ '\${ needs.${id}.result }}' == success || ( '\${ github.event_name }}' == pull_request && '\${ needs.impact.result }}' == success && '\${ fromJSON(needs.impact.outputs.jobs || '{}')['${id}'] }}' == false && '\${ needs.${id}.result }}' == skipped ) ]]"
+        "          [[ '\${{ needs.${id}.result }}' == success || ( '\${{ github.event_name }}' == pull_request && '\${{ needs.impact.result }}' == success && '\${{ fromJSON(needs.impact.outputs.jobs || '{}')['${id}'] }}' == false && '\${{ needs.${id}.result }}' == skipped ) ]]"
       else
-        "          [[ '\${ needs.${id}.result }}' == success ]]"
+        "          [[ '\${{ needs.${id}.result }}' == success ]]"
     ) jobIds;
 
   workflowLines = [
