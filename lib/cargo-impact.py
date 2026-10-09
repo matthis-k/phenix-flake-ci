@@ -6,6 +6,7 @@ Python dependencies. Uncertain inputs fail open to running the declared checks.
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tomllib
@@ -85,6 +86,97 @@ def workspace_member_only_change(config, changed, old_manifest, new_manifest):
         if manifest not in changed:
             return False
     return True
+
+
+def verified_generated_shard_edits(config, changed, metadata, base_revision):
+    """Prove generated CI edits only mirror one declared package shard list.
+
+    This is opt-in per consumer. A reviewer supplies file/attribute locations,
+    not dependency edges: all changed packages still come from Cargo metadata.
+    Arbitrary Nix/workflow edits, untracked package moves and parse ambiguity
+    force the ordinary full-CI fallback.
+    """
+    witness = config.get("verifiedShardChange")
+    if not isinstance(witness, dict):
+        return set()
+    if any(not isinstance(witness.get(key), str) or not witness[key]
+           for key in ("source", "list", "job", "workflow")):
+        return set()
+    source_path, workflow_path = witness["source"], witness["workflow"]
+    if source_path not in changed or workflow_path not in changed:
+        return set()
+
+    def previous(path):
+        return subprocess.check_output(
+            ["git", "show", base_revision + ":" + path], text=True,
+        )
+
+    def nix_list(contents, name):
+        lines = contents.splitlines(keepends=True)
+        start = re.compile(r"[ \t]*" + re.escape(name) + r"[ \t]*=[ \t]*\[[ \t]*\r?\n?")
+        matching = [i for i, line in enumerate(lines) if start.fullmatch(line)]
+        if len(matching) != 1:
+            raise ValueError("ambiguous Nix shard list: " + name)
+        begin = matching[0]
+        entries = []
+        for end in range(begin + 1, len(lines)):
+            if re.fullmatch(r"[ \t]*\];[ \t]*\r?\n?", lines[end]):
+                if len(entries) != len(set(entries)):
+                    raise ValueError("duplicate Nix CI shard package")
+                return (entries, "".join(lines[:begin]) + "<verified-shard-list>\n"
+                        + "".join(lines[end + 1:]))
+            match = re.fullmatch(r'[ \t]*"([A-Za-z0-9_-]+)"[ \t]*\r?\n?', lines[end])
+            if match is None:
+                raise ValueError("non-literal Nix shard list item")
+            entries.append(match.group(1))
+        raise ValueError("unterminated Nix shard list")
+
+    def yaml_impact(contents):
+        pattern = re.compile(r"^([ \t]*PHENIX_IMPACT_CONFIG:[ \t]*)(.+)$", re.MULTILINE)
+        found = list(pattern.finditer(contents))
+        if len(found) != 1:
+            raise ValueError("unexpected generated impact YAML structure")
+        encoded = json.loads(found[0].group(2))
+        if not isinstance(encoded, str):
+            raise ValueError("generated impact env is not a JSON string")
+        config_value = json.loads(encoded)
+        normalized = pattern.sub(r"\g<1><verified-impact-config>", contents)
+        return config_value, normalized
+
+    old_packages, old_source = nix_list(previous(source_path), witness["list"])
+    new_packages, new_source = nix_list(
+        Path(source_path).read_text(encoding="utf-8"), witness["list"],
+    )
+    if old_source != new_source:
+        return set()
+    old_config, old_workflow = yaml_impact(previous(workflow_path))
+    new_config, new_workflow = yaml_impact(
+        Path(workflow_path).read_text(encoding="utf-8"),
+    )
+    if old_workflow != new_workflow or new_config != config:
+        return set()
+    job = witness["job"]
+    if (old_config["jobs"][job]["packages"] != old_packages
+            or new_config["jobs"][job]["packages"] != new_packages):
+        return set()
+    # Only this job's target list and the opt-in witness may differ. No
+    # workflow logic, unrelated CI target or toolchain input is exempted.
+    old_config.pop("verifiedShardChange", None)
+    new_config.pop("verifiedShardChange", None)
+    old_config["jobs"][job]["packages"] = list(new_packages)
+    if old_config != new_config:
+        return set()
+
+    workspace_members = set(metadata["workspace_members"])
+    manifests = {
+        pkg["name"]: os.path.relpath(pkg["manifest_path"])
+        for pkg in metadata["packages"]
+        if pkg["id"] in workspace_members
+    }
+    for name in set(old_packages) ^ set(new_packages):
+        if name not in manifests or manifests[name] not in changed:
+            return set()
+    return {source_path, workflow_path}
 
 
 def cargo_closure(metadata, changed):
@@ -202,6 +294,16 @@ def run():
         ):
             print("Verified Cargo workspace member additions; deriving impact from added crate manifests")
             changed.remove(manifest_path)
+    if config.get("verifiedShardChange") is not None:
+        if "base_revision" not in locals():
+            base_revision = subprocess.check_output(
+                ["git", "merge-base", "refs/remotes/origin/" + base, "HEAD"],
+                text=True,
+            ).strip()
+        reviewed = verified_generated_shard_edits(config, changed, metadata, base_revision)
+        if reviewed:
+            print("Verified generated CI target-list sync:", sorted(reviewed))
+            changed = [name for name in changed if name not in reviewed]
     selected, crates = select_jobs(config, changed, metadata)
     return selected, changed, crates
 
