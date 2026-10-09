@@ -49,6 +49,9 @@ let
   impactConfig = {
     workspace = prImpact.workspace or "rust";
     jobs = listToAttrs (map (job: { name = job.id; value = job.impact; }) impactedJobs);
+    # Optional content-verified change classification. These are source
+    # locations, not dependency edges or an alternate package registry.
+    verifiedShardChange = prImpact.verifiedShardChange or null;
   };
   impactValid =
     if prImpact == null then true
@@ -57,6 +60,10 @@ let
     else if !impactEnabled then true
     else if !isString (prImpact.workspace or null) || (prImpact.workspace or "") == "" then
       fail "GitHub prImpact.workspace must be a non-empty Cargo workspace path"
+    else if prImpact ? verifiedShardChange &&
+      !(isAttrs prImpact.verifiedShardChange
+        && builtins.all (name: builtins.hasAttr name prImpact.verifiedShardChange && isString (builtins.getAttr name prImpact.verifiedShardChange) && (builtins.getAttr name prImpact.verifiedShardChange) != "") [ "source" "list" "job" "workflow" ]) then
+      fail "GitHub prImpact.verifiedShardChange must provide source, list, job and workflow paths"
     else if !(builtins.all (job:
       let rule = job.impact; in
       isAttrs rule && (rule.kind or null) == "cargo"
