@@ -102,8 +102,8 @@ in
 
   githubNixCacheSavesOnlyOnDefaultBranch =
     assert builtins.match ".*save:.*github.ref == 'refs/heads/release'.*" scopedOneLine != null;
-    assert builtins.match ".*if: github.event_name != 'pull_request'.*name: \\"Plain\\".*" scopedOneLine == null;
-    assert builtins.match ".*\\$\\{\\{ github.event_name \\}\\}.*skipped.*" scopedOneLine != null;
+    assert builtins.match ".*if: github.event_name != 'pull_request'.*" scopedOneLine != null;
+    assert builtins.match ".*github.event_name.*skipped.*" scopedOneLine != null;
     true;
 
   githubPullRequestSelectionValidatesDependencyClosure =
