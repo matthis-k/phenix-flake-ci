@@ -49,10 +49,11 @@ let
   impactConfig = {
     workspace = prImpact.workspace or "rust";
     jobs = listToAttrs (map (job: { name = job.id; value = job.impact; }) impactedJobs);
+  } // (if (prImpact.verifiedShardChange or null) == null then { } else {
     # Optional content-verified change classification. These are source
     # locations, not dependency edges or an alternate package registry.
-    verifiedShardChange = prImpact.verifiedShardChange or null;
-  };
+    inherit (prImpact) verifiedShardChange;
+  });
   impactValid =
     if prImpact == null then true
     else if !isAttrs prImpact || !(isBool (prImpact.enable or false)) then
