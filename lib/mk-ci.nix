@@ -100,6 +100,7 @@ let
       exec = suite.exec or null;
       needs = suite.needs or null;
       useCache = suite.cache or true;
+      impact = suite.impact or null;
     in
     if !isAttrs suite then
       fail "mkCi ${phase.id}.${suiteName} must be an attribute set"
@@ -119,6 +120,8 @@ let
       fail "mkCi ${phase.id}.${suiteName}.needs must be a list of `phase.suite` strings"
     else if !isBool useCache then
       fail "mkCi ${phase.id}.${suiteName}.cache must be a boolean"
+    else if impact != null && (!isAttrs impact || (impact.kind or null) != "cargo" || (impact.packages or null) != null && (!isList impact.packages || !(builtins.all isString impact.packages))) then
+      fail "mkCi ${phase.id}.${suiteName}.impact must be a Cargo rule with a package list or null"
     else
       {
         inherit
@@ -130,6 +133,7 @@ let
           exec
           needs
           useCache
+          impact
           ;
         phaseId = phase.id;
         phaseName = phase.name;
@@ -364,6 +368,7 @@ let
           needs = globalNeeds ++ map (need: need.taskId) suite.needs;
           env = globalEnv;
           cache = cacheForSuite suite;
+          impact = suite.impact;
         };
       };
     }

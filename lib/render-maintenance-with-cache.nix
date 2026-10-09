@@ -54,7 +54,27 @@ let
     { }
     ciEntries;
 
-  jobs = map (job: job // { cache = cacheByStage.${job.id} or null; }) base.jobs;
+  impactByStage = foldl'
+    (
+      acc: entry:
+      let
+        ci = normalizeCi entry.node;
+        stage = ci.stage or (pathId entry.path);
+        impact = ci.impact or null;
+        existing = acc.${stage} or null;
+      in
+      if existing != null && existing != impact then
+        throw "phenix-flake-ci: CI stage `${stage}` has conflicting impact metadata"
+      else
+        acc // { ${stage} = impact; }
+    )
+    { }
+    ciEntries;
+
+  jobs = map (job: job // {
+    cache = cacheByStage.${job.id} or null;
+    impact = impactByStage.${job.id} or null;
+  }) base.jobs;
   publicJobs = map (job: {
     inherit (job)
       id
@@ -65,6 +85,7 @@ let
       env
       commands
       cache
+      impact
       ;
   }) jobs;
   matrix = { include = publicJobs; };

@@ -58,6 +58,7 @@ let
         gateName = github.gateName or "Maintenance checks";
         nixCache = github.nixCache or null;
         pullRequestJobs = github.pullRequestJobs or null;
+        prImpact = github.prImpact or null;
         clean = github.clean or true;
       }
     else
