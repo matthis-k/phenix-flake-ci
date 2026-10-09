@@ -287,5 +287,39 @@ reduces PR job execution; Nix derivation source filtering and artifact-level
 incrementality are separate and require their own verification.
 
 The planner is generated inside the CI workflow by the library and requires
-only Python 3, Git and the runner's Cargo installation. Use the rendered
+Python 3.11+, Git and the runner's Cargo installation. Use the rendered
 workflow, not a separately maintained `scripts/` implementation.
+
+### Content-verified narrow rebuild inputs
+
+Changes to `Cargo.lock` normally affect the entire dependency graph. The
+planner can now prove a narrower case using the lockfile at the Git merge-base:
+only local workspace package records changed, every changed package has a
+corresponding changed `Cargo.toml`, and all registry, checksum, lockfile
+format and other shared metadata remain identical. In that case Cargo's
+current dependency metadata determines the reverse closure. Adding workspace
+members is likewise narrow only if the root `Cargo.toml` changed solely by
+adding members whose own manifests appear in the PR diff. Anything else
+continues to run all checks.
+
+For a generated CI impact target-list change, consumers may opt in to a
+strictly checked source correspondence:
+
+```nix
+ci.github.prImpact.verifiedShardChange = {
+  source = "modules/development.nix";
+  list = "pluginFoundation";
+  job = "test-unit-plugin-foundation";
+  workflow = ".github/workflows/ci.yml";
+};
+```
+
+This does **not** duplicate Cargo dependencies or mark arbitrary Nix and
+workflow edits harmless. The planner compares source and generated files with
+the merge-base, strips only a plain literal Nix list and one generated
+`PHENIX_IMPACT_CONFIG` line, and requires the remainder of both files to be
+byte-identical. The old/new job targets must exactly match the old/new
+declaration list; every changed target must have a changed workspace crate
+manifest. Any additional diff or parsing ambiguity restores the full-CI
+fallback. The normal Source check still verifies generated workflow
+synchronization.

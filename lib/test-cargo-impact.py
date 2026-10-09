@@ -19,10 +19,10 @@ class ImpactTests(unittest.TestCase):
         self.metadata = {
             "workspace_members": ["leaf", "sdk", "app", "other"],
             "packages": [
-                {"id": "leaf", "name": "leaf", "manifest_path": str(self.root / "rust/crates/leaf/Cargo.toml"), "dependencies": []},
-                {"id": "sdk", "name": "sdk", "manifest_path": str(self.root / "rust/crates/sdk/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/leaf")}]},
-                {"id": "app", "name": "app", "manifest_path": str(self.root / "rust/crates/app/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/sdk")}]},
-                {"id": "other", "name": "other", "manifest_path": str(self.root / "rust/crates/other/Cargo.toml"), "dependencies": []},
+                {"id": "leaf", "name": "leaf", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/leaf/Cargo.toml"), "dependencies": []},
+                {"id": "sdk", "name": "sdk", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/sdk/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/leaf")}]},
+                {"id": "app", "name": "app", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/app/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/sdk")}]},
+                {"id": "other", "name": "other", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/other/Cargo.toml"), "dependencies": []},
             ],
         }
         self.config = {"workspace": "rust", "jobs": {
@@ -40,6 +40,172 @@ class ImpactTests(unittest.TestCase):
             return impact.select_jobs(self.config, filenames, self.metadata)
         finally:
             os.chdir(old)
+
+    def lock_is_scoped(self, changed, before, after):
+        old = Path.cwd()
+        import os
+        os.chdir(self.root)
+        try:
+            return impact.workspace_only_lock_changes(
+                self.config, changed, self.metadata, before, after
+            )
+        finally:
+            os.chdir(old)
+
+    def test_lockfile_workspace_dependency_edit_preserves_narrow_impact(self):
+        external = {
+            "name": "external", "version": "1.2.3",
+            "source": "registry+https://example.invalid", "checksum": "unchanged",
+        }
+        old = {"version": 4, "package": [
+            {"name": "leaf", "version": "0.1.0", "dependencies": ["serde"]},
+            external,
+        ]}
+        new = {"version": 4, "package": [
+            {"name": "leaf", "version": "0.1.0", "dependencies": ["serde", "getrandom"]},
+            external,
+        ]}
+        changed = ["rust/Cargo.lock", "rust/crates/leaf/Cargo.toml"]
+        self.assertTrue(self.lock_is_scoped(changed, old, new))
+        jobs, crates = self.at_repo(["rust/crates/leaf/Cargo.toml"])
+        self.assertEqual(crates, ["app", "leaf", "sdk"])
+        self.assertFalse(jobs["test-other"])
+        self.assertFalse(self.lock_is_scoped(["rust/Cargo.lock"], old, new))
+
+    def test_lockfile_added_workspace_package_is_scoped_only_with_its_manifest(self):
+        old = {"version": 4, "package": []}
+        new = {"version": 4, "package": [
+            {"name": "other", "version": "0.1.0", "dependencies": ["leaf"]},
+        ]}
+        self.assertTrue(self.lock_is_scoped(
+            ["rust/Cargo.lock", "rust/crates/other/Cargo.toml"], old, new,
+        ))
+        self.assertFalse(self.lock_is_scoped(["rust/Cargo.lock"], old, new))
+
+    def test_external_or_global_lockfile_changes_still_fail_open(self):
+        old = {"version": 4, "package": [
+            {"name": "leaf", "version": "0.1.0", "dependencies": []},
+            {"name": "dep", "version": "1.0.0", "source": "registry+https://example.invalid", "checksum": "first"},
+        ]}
+        manifests = ["rust/Cargo.lock", "rust/crates/leaf/Cargo.toml"]
+        for changed in [
+            {"version": 4, "package": [
+                old["package"][0],
+                {"name": "dep", "version": "1.0.0", "source": "registry+https://example.invalid", "checksum": "second"},
+            ]},
+            {"version": 4, "package": [
+                old["package"][0],
+                {"name": "dep", "version": "1.0.1", "source": "registry+https://example.invalid", "checksum": "second"},
+            ]},
+            {"version": 3, "package": old["package"]},
+            {"version": 4, "package": [
+                {"name": "missing-workspace-package", "version": "0.1.0"},
+                *old["package"],
+            ]},
+        ]:
+            with self.subTest(changed=changed):
+                self.assertFalse(self.lock_is_scoped(manifests, old, changed))
+
+    def test_workspace_member_additions_require_changed_member_manifests(self):
+        old = {
+            "workspace": {
+                "members": ["crates/leaf", "crates/sdk"],
+                "resolver": "3",
+            },
+            "profile": {"release": {"opt-level": 3}},
+        }
+        new = {
+            "workspace": {
+                "members": ["crates/leaf", "crates/sdk", "crates/other"],
+                "resolver": "3",
+            },
+            "profile": {"release": {"opt-level": 3}},
+        }
+        self.assertTrue(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, new,
+        ))
+        self.assertFalse(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml"], old, new,
+        ))
+        removed = {**new, "workspace": {**new["workspace"], "members": ["crates/sdk"]}}
+        self.assertFalse(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, removed,
+        ))
+        changed_profile = {**new, "profile": {"release": {"opt-level": 2}}}
+        self.assertFalse(impact.workspace_member_only_change(
+            self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, changed_profile,
+        ))
+
+    def test_generated_shard_sync_is_content_proven_before_narrowing(self):
+        import os
+
+        witness = {
+            "source": "modules/development.nix",
+            "list": "pluginFoundation",
+            "job": "test-leaf",
+            "workflow": ".github/workflows/ci.yml",
+        }
+        old_config = json.loads(json.dumps(self.config))
+        new_config = json.loads(json.dumps(self.config))
+        new_config["verifiedShardChange"] = witness
+        new_config["jobs"]["test-leaf"]["packages"] = ["leaf", "other"]
+
+        def workflow(config):
+            line = json.dumps(json.dumps(config, sort_keys=True, separators=(",", ":")))
+            return "name: CI\n  PHENIX_IMPACT_CONFIG: " + line + "\n  run: echo unchanged\n"
+
+        old_source = 'let\n  pluginFoundation = [\n    "leaf"\n  ];\nin {}\n'
+        new_source = 'let\n  pluginFoundation = [\n    "leaf"\n    "other"\n  ];\nin {}\n'
+        source = self.root / witness["source"]
+        generated = self.root / witness["workflow"]
+        source.parent.mkdir(parents=True)
+        generated.parent.mkdir(parents=True)
+        source.write_text(new_source)
+        generated.write_text(workflow(new_config))
+        previous = {
+            "base:modules/development.nix": old_source,
+            "base:.github/workflows/ci.yml": workflow(old_config),
+        }
+
+        def git_output(cmd, text=True):
+            self.assertEqual(cmd[:2], ["git", "show"])
+            return previous[cmd[2]]
+
+        changed = [
+            "rust/crates/other/Cargo.toml", "modules/development.nix",
+            ".github/workflows/ci.yml",
+        ]
+        before = Path.cwd()
+        os.chdir(self.root)
+        try:
+            with mock.patch.object(impact.subprocess, "check_output", side_effect=git_output):
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(new_config, changed, self.metadata, "base"),
+                    {witness["source"], witness["workflow"]},
+                )
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(
+                        new_config, changed[:-1], self.metadata, "base",
+                    ), set(),
+                )
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(
+                        new_config, changed[1:], self.metadata, "base",
+                    ), set(),
+                )
+                generated.write_text(workflow(new_config) + "  run: dangerous-change\n")
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(new_config, changed, self.metadata, "base"),
+                    set(),
+                )
+                generated.write_text(workflow(new_config))
+                source.write_text(new_source.replace("in {}", "in { unsafe = true; }"))
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(new_config, changed, self.metadata, "base"),
+                    set(),
+                )
+        finally:
+            os.chdir(before)
 
     def test_leaf_edit_runs_reverse_dependents_not_unrelated(self):
         jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
@@ -75,6 +241,7 @@ class ImpactTests(unittest.TestCase):
         self.metadata["packages"].append({
             "id": "leaf-extra",
             "name": "leaf-extra",
+            "version": "0.1.0",
             "manifest_path": str(self.root / "rust/crates/leaf-extra/Cargo.toml"),
             "dependencies": [],
         })
