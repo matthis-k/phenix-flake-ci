@@ -28,6 +28,9 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
+      - name: Test dependency impact planner
+        run: python3 lib/test-cargo-impact.py -v
+
       - name: Evaluate library tests
         run: nix eval --json .#lib.tests
 

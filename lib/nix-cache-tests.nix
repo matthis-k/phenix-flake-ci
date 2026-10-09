@@ -50,10 +50,14 @@ let
   oneLine = builtins.replaceStrings [ "\n" ] [ " " ] workflow;
 
   scopedWorkflow = renderGithubWorkflow {
-    inherit jobs;
+    jobs = builtins.map (job: if job.id == "cached" then job // { impact = { kind = "cargo"; packages = [ "crate-a" ]; }; } else job) jobs;
     clean = false;
     mainBranch = "release";
     pullRequestJobs = [ "cached" ];
+    prImpact = {
+      enable = true;
+      workspace = "rust";
+    };
     nixCache = {
       enable = true;
       jobs = [ "cached" ];
@@ -104,6 +108,10 @@ in
     assert builtins.match ".*save:.*github.ref == 'refs/heads/release'.*" scopedOneLine != null;
     assert builtins.match ".*if: github.event_name != 'pull_request'.*" scopedOneLine != null;
     assert builtins.match ".*github.event_name.*skipped.*" scopedOneLine != null;
+    assert builtins.match ".*name: Dependency impact plan.*" scopedOneLine != null;
+    assert builtins.match ".*fetch-depth: 0.*" scopedOneLine != null;
+    assert builtins.match ".*needs.impact.outputs.jobs.*cached.*" scopedOneLine != null;
+    assert builtins.match ".*impact.*cached.*fromJSON.*" scopedOneLine != null;
     true;
 
   githubPullRequestSelectionValidatesDependencyClosure =

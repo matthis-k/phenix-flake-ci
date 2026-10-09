@@ -262,3 +262,30 @@ A command that invokes another maintenance command must declare that relationshi
 When `ci.github.enable = true`, the workflow is generated from the maintenance graph. Each CI job feeds a JSON invocation into a command-scoped flake app with `nix run --quiet`.
 
 Consumers should commit the generated workflow and keep it synchronized with the Nix declaration.
+
+## Dependency-derived PR check selection (experimental)
+
+Enable `ci.github.prImpact = { enable = true; workspace = "rust"; };` to
+generate one preflight GitHub job that computes affected Cargo workspace crates
+from `cargo metadata --locked --offline --no-deps` and the PR merge-base diff.
+
+Annotate an existing suite's **execution targets** with
+`impact = { kind = "cargo"; packages = packages; };` where `packages` is
+the same list used to form that suite's `cargo test -p` command. Use
+`packages = null` for checks such as whole-workspace Clippy that must run
+for any Rust crate change. Unannotated suites retain existing PR behavior.
+The planner follows Cargo path dependencies transitively in reverse, rather
+than maintaining a separate dependency table.
+
+Each impacted job waits for the planner before its Nix installation and cache
+restore. Jobs declared unaffected by the plan are skipped; the required gate
+only accepts a skip for a planner-confirmed unaffected job. Main pushes and
+manual runs still run the complete configured suite. Missing metadata,
+unknown paths, shared manifests, toolchain/build-config edits, invalid
+targets and planner failures select **all** impacted jobs. This feature only
+reduces PR job execution; Nix derivation source filtering and artifact-level
+incrementality are separate and require their own verification.
+
+The planner is generated inside the CI workflow by the library and requires
+only Python 3, Git and the runner's Cargo installation. Use the rendered
+workflow, not a separately maintained `scripts/` implementation.
