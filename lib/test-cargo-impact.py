@@ -19,10 +19,10 @@ class ImpactTests(unittest.TestCase):
         self.metadata = {
             "workspace_members": ["leaf", "sdk", "app", "other"],
             "packages": [
-                {"id": "leaf", "name": "leaf", "manifest_path": str(self.root / "rust/crates/leaf/Cargo.toml"), "dependencies": []},
-                {"id": "sdk", "name": "sdk", "manifest_path": str(self.root / "rust/crates/sdk/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/leaf")}]},
-                {"id": "app", "name": "app", "manifest_path": str(self.root / "rust/crates/app/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/sdk")}]},
-                {"id": "other", "name": "other", "manifest_path": str(self.root / "rust/crates/other/Cargo.toml"), "dependencies": []},
+                {"id": "leaf", "name": "leaf", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/leaf/Cargo.toml"), "dependencies": []},
+                {"id": "sdk", "name": "sdk", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/sdk/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/leaf")}]},
+                {"id": "app", "name": "app", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/app/Cargo.toml"), "dependencies": [{"path": str(self.root / "rust/crates/sdk")}]},
+                {"id": "other", "name": "other", "version": "0.1.0", "manifest_path": str(self.root / "rust/crates/other/Cargo.toml"), "dependencies": []},
             ],
         }
         self.config = {"workspace": "rust", "jobs": {
@@ -241,6 +241,7 @@ class ImpactTests(unittest.TestCase):
         self.metadata["packages"].append({
             "id": "leaf-extra",
             "name": "leaf-extra",
+            "version": "0.1.0",
             "manifest_path": str(self.root / "rust/crates/leaf-extra/Cargo.toml"),
             "dependencies": [],
         })
