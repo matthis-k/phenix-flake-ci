@@ -112,6 +112,10 @@ in
     assert builtins.match ".*fetch-depth: 0.*" scopedOneLine != null;
     assert builtins.match ".*needs.impact.outputs.jobs.*cached.*" scopedOneLine != null;
     assert builtins.match ".*impact.*cached.*fromJSON.*" scopedOneLine != null;
+    assert builtins.match ".*jobs: [$][{][{] steps[.]select[.]outputs[.]jobs [}][}].*" scopedOneLine != null;
+    assert builtins.match ".*GITHUB_BASE_REF: [$][{][{] github[.]base_ref [}][}].*" scopedOneLine != null;
+    assert builtins.match ".*[$][{][{] needs[.]impact[.]result [}][}].*" scopedOneLine != null;
+    assert builtins.match ".*[$][{] (github|needs|fromJSON).*" scopedOneLine == null;
     true;
 
   githubPullRequestSelectionValidatesDependencyClosure =
