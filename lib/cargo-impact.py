@@ -36,19 +36,24 @@ def workspace_only_lock_changes(config, changed, metadata, old_lock, new_lock):
     before = indexed(old_lock.get("package", []))
     after = indexed(new_lock.get("package", []))
     workspace = set(metadata["workspace_members"])
-    manifests = {
-        pkg["name"]: os.path.relpath(pkg["manifest_path"])
-        for pkg in metadata["packages"]
-        if pkg["id"] in workspace
-    }
+    manifests = {}
+    for pkg in metadata["packages"]:
+        if pkg["id"] not in workspace:
+            continue
+        key = (pkg["name"], pkg["version"])
+        if key in manifests:
+            # Metadata itself is ambiguous; no name-only fallbacks.
+            return False
+        manifests[key] = os.path.relpath(pkg["manifest_path"])
     differences = [
         key for key in before.keys() | after.keys()
         if before.get(key) != after.get(key)
     ]
     if not differences:
         return True
-    for name, _, source in differences:
-        if source is not None or name not in manifests or manifests[name] not in changed:
+    for name, version, source in differences:
+        package = (name, version)
+        if source is not None or package not in manifests or manifests[package] not in changed:
             return False
     return True
 
