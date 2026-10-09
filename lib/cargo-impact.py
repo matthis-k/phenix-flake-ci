@@ -8,6 +8,48 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
+
+
+def workspace_only_lock_changes(config, changed, metadata, old_lock, new_lock):
+    """Prove Cargo.lock changed only records of workspace crates with changed manifests.
+
+    Cargo.lock is normally a shared compiler input. Never narrow an external
+    dependency revision, checksum, lockfile format or unaccounted package edit.
+    Paths and dependency closure come from Cargo metadata, not a parallel table.
+    """
+    if {k: v for k, v in old_lock.items() if k != "package"} != {
+        k: v for k, v in new_lock.items() if k != "package"
+    }:
+        return False
+
+    def indexed(packages):
+        result = {}
+        for package in packages:
+            key = (package["name"], package["version"], package.get("source"))
+            if key in result:
+                raise ValueError("ambiguous Cargo.lock package identity: " + repr(key))
+            result[key] = package
+        return result
+
+    before = indexed(old_lock.get("package", []))
+    after = indexed(new_lock.get("package", []))
+    workspace = set(metadata["workspace_members"])
+    manifests = {
+        pkg["name"]: os.path.relpath(pkg["manifest_path"])
+        for pkg in metadata["packages"]
+        if pkg["id"] in workspace
+    }
+    differences = [
+        key for key in before.keys() | after.keys()
+        if before.get(key) != after.get(key)
+    ]
+    if not differences:
+        return True
+    for name, _, source in differences:
+        if source is not None or name not in manifests or manifests[name] not in changed:
+            return False
+    return True
 
 
 def cargo_closure(metadata, changed):
@@ -100,6 +142,21 @@ def run():
          "--manifest-path", config["workspace"].rstrip("/") + "/Cargo.toml"],
         text=True,
     ))
+    lock_path = config["workspace"].rstrip("/") + "/Cargo.lock"
+    if lock_path in changed:
+        # Use the same merge base as the filename diff. Comparing against the
+        # latest base tip could mistake unrelated newer commits for this PR.
+        base_revision = subprocess.check_output(
+            ["git", "merge-base", "refs/remotes/origin/" + base, "HEAD"],
+            text=True,
+        ).strip()
+        previous = tomllib.loads(subprocess.check_output(
+            ["git", "show", base_revision + ":" + lock_path], text=True,
+        ))
+        current = tomllib.loads(Path(lock_path).read_text(encoding="utf-8"))
+        if workspace_only_lock_changes(config, changed, metadata, previous, current):
+            print("Verified workspace-only Cargo.lock changes; deriving impact from changed manifests")
+            changed.remove(lock_path)
     selected, crates = select_jobs(config, changed, metadata)
     return selected, changed, crates
 
