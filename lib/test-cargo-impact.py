@@ -61,6 +61,61 @@ class ImpactTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.at_repo([name])
 
+    def test_multiple_independent_crate_changes_union_without_full_fallback(self):
+        jobs, crates = self.at_repo([
+            "rust/crates/leaf/src/lib.rs",
+            "rust/crates/other/src/lib.rs",
+        ])
+        self.assertEqual(crates, ["app", "leaf", "other", "sdk"])
+        self.assertTrue(all(jobs.values()))
+
+    def test_path_prefix_is_not_an_dependency_edge(self):
+        self.metadata["workspace_members"].append("leaf-extra")
+        self.metadata["packages"].append({
+            "id": "leaf-extra",
+            "name": "leaf-extra",
+            "manifest_path": str(self.root / "rust/crates/leaf-extra/Cargo.toml"),
+            "dependencies": [],
+        })
+        jobs, crates = self.at_repo(["rust/crates/leaf-extra/src/lib.rs"])
+        self.assertEqual(crates, ["leaf-extra"])
+        self.assertEqual(jobs, {
+            "test-leaf": False,
+            "test-app": False,
+            "test-other": False,
+            "clippy": True,
+        })
+
+    def test_combined_docs_and_leaf_change_keeps_narrow_selection(self):
+        jobs, crates = self.at_repo([
+            "spec/ci-selection.md",
+            "README.md",
+            "rust/crates/other/src/lib.rs",
+        ])
+        self.assertEqual(crates, ["other"])
+        self.assertEqual(jobs, {
+            "test-leaf": False,
+            "test-app": False,
+            "test-other": True,
+            "clippy": True,
+        })
+
+    def test_unknown_build_input_blocks_selective_skips_even_with_known_leaf(self):
+        with self.assertRaisesRegex(ValueError, "unclassified"):
+            self.at_repo([
+                "rust/crates/other/src/lib.rs",
+                "modules/development.nix",
+            ])
+
+    def test_dependency_kinds_are_all_included_for_conservative_selection(self):
+        self.metadata["packages"][3]["dependencies"] = [{
+            "path": str(self.root / "rust/crates/leaf"),
+            "kind": "build",
+        }]
+        jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
+        self.assertEqual(crates, ["app", "leaf", "other", "sdk"])
+        self.assertTrue(jobs["test-other"])
+
     def test_invalid_declared_target_rejects_plan(self):
         self.config["jobs"]["test-leaf"]["packages"] = ["misnamed"]
         with self.assertRaises(ValueError):
