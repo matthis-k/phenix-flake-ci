@@ -128,7 +128,7 @@ class ImpactTests(unittest.TestCase):
                 {"test-leaf": True}, ["rust/crates/leaf/src/lib.rs"], ["leaf", "sdk"]
             )):
                 impact.main()
-            self.assertIn("packages=[\\"leaf\\",\\"sdk\\"]\\n".replace("\\n", "\n"), output.read_text())
+            self.assertIn("packages=" + json.dumps(["leaf", "sdk"], separators=(",", ":")) + "\n", output.read_text())
             output.unlink()
             with mock.patch.object(impact, "run", side_effect=ValueError("unknown build input")):
                 impact.main()
