@@ -272,7 +272,9 @@ let
         "        run: |"
         "          set -euo pipefail"
         "          python3 - <<'PY'"
-        ("          " + replaceStrings [ "\n" ] [ "\n          " ] (builtins.readFile ./cargo-impact.py))
+      ]
+      ++ (map (line: if line == "" then "" else "          ${line}") (builtins.filter builtins.isString (builtins.split "\n" (builtins.readFile ./cargo-impact.py))))
+      ++ [
         "          PY"
         ""
       ];
