@@ -226,6 +226,24 @@ let
     ];
   };
   ownedCacheOneLine = builtins.replaceStrings [ "\n" ] [ " " ] ownedCacheWorkflow;
+  impactedWorkflow = import ./render-github-workflow.nix {
+    inherit outputName;
+    clean = false;
+    pullRequestJobs = [ "build-compile" ];
+    prImpact = {
+      enable = true;
+      workspace = "rust";
+    };
+    jobs = [
+      (renderedBuild // {
+        impact = {
+          kind = "cargo";
+          packages = null;
+        };
+      })
+    ];
+  };
+  impactedWorkflowFlat = builtins.replaceStrings [ "\n" ] [ " " ] impactedWorkflow;
 in
 {
   leafClosureIsScoped =
@@ -336,6 +354,12 @@ in
 
   disabledSemanticCacheWriterRejected =
     assert !disabledCacheWriter.success;
+    true;
+
+  impactedJobsReceiveSingleCargoMetadataPackageList =
+    assert builtins.match ".*steps.select.outputs.packages.*" impactedWorkflowFlat != null;
+    assert builtins.match ".*PHENIX_IMPACT_PACKAGES:.*needs.impact.outputs.packages.*" impactedWorkflowFlat != null;
+    assert builtins.match ".*steps.select.outputs.jobs.*" impactedWorkflowFlat != null;
     true;
 
   workflowUsesScopedOutputCacheAndJsonInvocation =
