@@ -99,6 +99,7 @@ let
         key = "rust-\${{ runner.os }}-\${{ github.sha }}";
         restoreKeys = [ "rust-\${{ runner.os }}-" ];
         writer = "build.compile";
+        saveOnDefaultBranch = true;
       };
     };
   };
@@ -275,6 +276,7 @@ in
   semanticCacheCanBeSharedOrSkipped =
     assert renderedBuild.cache.key == "rust-\${{ runner.os }}-\${{ github.sha }}";
     assert renderedBuild.cache.save;
+    assert renderedBuild.cache.saveOnDefaultBranch;
     assert renderedTest.cache.paths == [
       "\${{ runner.temp }}/cargo-home"
       "\${{ runner.temp }}/cargo-target"
@@ -287,6 +289,7 @@ in
     assert builtins.match ".*actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830.*" ownedCacheOneLine != null;
     assert builtins.match ".*actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830.*" ownedCacheOneLine != null;
     assert builtins.match ".*steps.phenix-cache-restore.outputs.cache-hit.*" ownedCacheOneLine != null;
+    assert builtins.match ".*github.ref == 'refs/heads/main'.*" ownedCacheOneLine != null;
     true;
 
   semanticSuitesEmitJsonAndHideSuccessOutput =
