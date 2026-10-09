@@ -136,6 +136,77 @@ class ImpactTests(unittest.TestCase):
             self.config, ["rust/Cargo.toml", "rust/crates/other/Cargo.toml"], old, changed_profile,
         ))
 
+    def test_generated_shard_sync_is_content_proven_before_narrowing(self):
+        import os
+
+        witness = {
+            "source": "modules/development.nix",
+            "list": "pluginFoundation",
+            "job": "test-leaf",
+            "workflow": ".github/workflows/ci.yml",
+        }
+        old_config = json.loads(json.dumps(self.config))
+        new_config = json.loads(json.dumps(self.config))
+        new_config["verifiedShardChange"] = witness
+        new_config["jobs"]["test-leaf"]["packages"] = ["leaf", "other"]
+
+        def workflow(config):
+            line = json.dumps(json.dumps(config, sort_keys=True, separators=(",", ":")))
+            return "name: CI\n  PHENIX_IMPACT_CONFIG: " + line + "\n  run: echo unchanged\n"
+
+        old_source = 'let\n  pluginFoundation = [\n    "leaf"\n  ];\nin {}\n'
+        new_source = 'let\n  pluginFoundation = [\n    "leaf"\n    "other"\n  ];\nin {}\n'
+        source = self.root / witness["source"]
+        generated = self.root / witness["workflow"]
+        source.parent.mkdir(parents=True)
+        generated.parent.mkdir(parents=True)
+        source.write_text(new_source)
+        generated.write_text(workflow(new_config))
+        previous = {
+            "base:modules/development.nix": old_source,
+            "base:.github/workflows/ci.yml": workflow(old_config),
+        }
+
+        def git_output(cmd, text=True):
+            self.assertEqual(cmd[:2], ["git", "show"])
+            return previous[cmd[2]]
+
+        changed = [
+            "rust/crates/other/Cargo.toml", "modules/development.nix",
+            ".github/workflows/ci.yml",
+        ]
+        before = Path.cwd()
+        os.chdir(self.root)
+        try:
+            with mock.patch.object(impact.subprocess, "check_output", side_effect=git_output):
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(new_config, changed, self.metadata, "base"),
+                    {witness["source"], witness["workflow"]},
+                )
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(
+                        new_config, changed[:-1], self.metadata, "base",
+                    ), set(),
+                )
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(
+                        new_config, changed[1:], self.metadata, "base",
+                    ), set(),
+                )
+                generated.write_text(workflow(new_config) + "  run: dangerous-change\n")
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(new_config, changed, self.metadata, "base"),
+                    set(),
+                )
+                generated.write_text(workflow(new_config))
+                source.write_text(new_source.replace("in {}", "in { unsafe = true; }"))
+                self.assertEqual(
+                    impact.verified_generated_shard_edits(new_config, changed, self.metadata, "base"),
+                    set(),
+                )
+        finally:
+            os.chdir(before)
+
     def test_leaf_edit_runs_reverse_dependents_not_unrelated(self):
         jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
         self.assertEqual(crates, ["app", "leaf", "sdk"])
