@@ -41,6 +41,71 @@ class ImpactTests(unittest.TestCase):
         finally:
             os.chdir(old)
 
+    def lock_is_scoped(self, changed, before, after):
+        old = Path.cwd()
+        import os
+        os.chdir(self.root)
+        try:
+            return impact.workspace_only_lock_changes(
+                self.config, changed, self.metadata, before, after
+            )
+        finally:
+            os.chdir(old)
+
+    def test_lockfile_workspace_dependency_edit_preserves_narrow_impact(self):
+        external = {
+            "name": "external", "version": "1.2.3",
+            "source": "registry+https://example.invalid", "checksum": "unchanged",
+        }
+        old = {"version": 4, "package": [
+            {"name": "leaf", "version": "0.1.0", "dependencies": ["serde"]},
+            external,
+        ]}
+        new = {"version": 4, "package": [
+            {"name": "leaf", "version": "0.1.0", "dependencies": ["serde", "getrandom"]},
+            external,
+        ]}
+        changed = ["rust/Cargo.lock", "rust/crates/leaf/Cargo.toml"]
+        self.assertTrue(self.lock_is_scoped(changed, old, new))
+        jobs, crates = self.at_repo(["rust/crates/leaf/Cargo.toml"])
+        self.assertEqual(crates, ["app", "leaf", "sdk"])
+        self.assertFalse(jobs["test-other"])
+        self.assertFalse(self.lock_is_scoped(["rust/Cargo.lock"], old, new))
+
+    def test_lockfile_added_workspace_package_is_scoped_only_with_its_manifest(self):
+        old = {"version": 4, "package": []}
+        new = {"version": 4, "package": [
+            {"name": "other", "version": "0.1.0", "dependencies": ["leaf"]},
+        ]}
+        self.assertTrue(self.lock_is_scoped(
+            ["rust/Cargo.lock", "rust/crates/other/Cargo.toml"], old, new,
+        ))
+        self.assertFalse(self.lock_is_scoped(["rust/Cargo.lock"], old, new))
+
+    def test_external_or_global_lockfile_changes_still_fail_open(self):
+        old = {"version": 4, "package": [
+            {"name": "leaf", "version": "0.1.0", "dependencies": []},
+            {"name": "dep", "version": "1.0.0", "source": "registry+https://example.invalid", "checksum": "first"},
+        ]}
+        manifests = ["rust/Cargo.lock", "rust/crates/leaf/Cargo.toml"]
+        for changed in [
+            {"version": 4, "package": [
+                old["package"][0],
+                {"name": "dep", "version": "1.0.0", "source": "registry+https://example.invalid", "checksum": "second"},
+            ]},
+            {"version": 4, "package": [
+                old["package"][0],
+                {"name": "dep", "version": "1.0.1", "source": "registry+https://example.invalid", "checksum": "second"},
+            ]},
+            {"version": 3, "package": old["package"]},
+            {"version": 4, "package": [
+                {"name": "missing-workspace-package", "version": "0.1.0"},
+                *old["package"],
+            ]},
+        ]:
+            with self.subTest(changed=changed):
+                self.assertFalse(self.lock_is_scoped(manifests, old, changed))
+
     def test_leaf_edit_runs_reverse_dependents_not_unrelated(self):
         jobs, crates = self.at_repo(["rust/crates/leaf/src/lib.rs"])
         self.assertEqual(crates, ["app", "leaf", "sdk"])
