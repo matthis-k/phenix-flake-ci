@@ -263,6 +263,17 @@ When `ci.github.enable = true`, the workflow is generated from the maintenance g
 
 Consumers should commit the generated workflow and keep it synchronized with the Nix declaration.
 
+## Flake-aware Nix checks roadmap
+
+[Flake-aware CI roadmap](docs/flake-aware-ci-roadmap.md) describes the proposed
+opt-in Nix check planner, verified check inventory, shared-output scheduling
+and evidence-based CI gate. It builds on `mkCi` and the existing Cargo impact
+planner. These features are planned, not implemented.
+
+The consumer flake remains responsible for check derivations, Rust compilation
+reuse, and optimized release evidence. The CI library owns scheduling,
+selection proofs, cache policy and generated GitHub workflows.
+
 ## Dependency-derived PR check selection (experimental)
 
 Enable `ci.github.prImpact = { enable = true; workspace = "rust"; };` to
