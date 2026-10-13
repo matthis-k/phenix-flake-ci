@@ -44,8 +44,8 @@ let
       fail "only the Tailscale remote transport is supported"
     else if remoteSelected && (!builtins.isInt workers || workers < 1 || workers > 16) then
       fail "remote workers must be between 1 and 16"
-    else if remoteSelected && (!builtins.isInt slotsPerWorker || slotsPerWorker < 1 || slotsPerWorker > 64) then
-      fail "remote slotsPerWorker must be between 1 and 64"
+    else if remoteSelected && (!builtins.isInt slotsPerWorker || slotsPerWorker < 1 || slotsPerWorker > 32) then
+      fail "remote slotsPerWorker must be between 1 and 32"
     else if remoteSelected && !(builtins.elem credentials [ "oidc" "authkey" ]) then
       fail "remote credentials must be oidc or authkey"
     else if !safePath configPath then
