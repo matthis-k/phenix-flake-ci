@@ -1,6 +1,6 @@
 # Flake-aware CI roadmap
 
-Status: FC1 and FC3 implementation in progress on the PR branch; exact-head CI and consumer parity pending
+Status: FC1 and FC3 candidates implemented; FC4 cache policy and prebuild evidence implemented; FC2 impact proofs pending. Consumer and release parity unverified.
 Consumer: [phenix-ai](https://github.com/matthis-k/phenix-ai)
 Baseline: [M1 CI matrix rollout](https://github.com/matthis-k/phenix-ai/blob/impl/m1-basic-acp/spec/m1-ci-matrix.md)
 
@@ -156,3 +156,17 @@ Do not implement a second derivation evaluator, a generic build scheduler,
 kernel-specific CI rules in the library, automatic unsafe skipping, or a second
 test/ABI implementation. The first version should reuse `mkCi` and the
 existing generated GitHub workflow.
+
+## Implementation record
+
+The current branch adds `mkFlakeCheckConfig` and injected toolchain strategy
+functions. `flake-check-plan.py` evaluates every check at the checked-out
+commit, writes deterministic shards, computes a lockfile-derived cache identity,
+prebuilds declared Nix packages and checks exact-head evidence. The reusable
+GitHub workflow contains the cache writer, read-only consumers and aggregate.
+Phenix AI consumes it through a thin workflow call.
+
+This is full-suite scheduling, not selective PR skipping. FC2 and AI-CI4 still
+need derivation-input impact witnesses. AI-CI1 still needs consolidation of the
+duplicate Cargo fixture builds. Compare production closure and optimized
+shipping output with the existing full gate before switching required checks.
