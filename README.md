@@ -398,3 +398,34 @@ GitHub Actions jobs. Consumers call it using an immutable commit ref and pass
 the same commit in `library_ref`, plus the Nix config file path. The Nix
 `cache.keyFiles` policy supplies the cache key identity. This avoids a
 language-specific lockfile list in the reusable workflow.
+
+## Generated exact-head Nix DAG (experimental)
+
+The optional `flake-dag-staged.yml` reusable workflow is a candidate
+alternative to the fixed Nix shard matrix. It does **not** replace the
+existing required shipping gate.
+
+1. Discover all `checks.<system>` directly from the consumer flake.
+2. Read the recursive Nix derivation DAG and `inputDrvs`; cache the
+   normalized adjacency/check dependency graph under the exact commit and
+   complete check-plan digest. A changed derivation invalidates the DAG cache.
+3. Build the declared shared hotset once into a read-only base Nix cache.
+4. Automatically fan out checks with no dependencies on other named checks.
+   Each ready shard builds its real Nix derivations and exports the incremental
+   Nix store closure, excluding the shared cache's already-realized closure.
+5. The join job restores the shared cache, imports leaf output archives,
+   verifies that completed leaf outputs exist in its local Nix store, then
+   builds dependent checks (including shipping) and emits full evidence.
+
+This is bounded, dynamic GitHub Actions fan-out with a static final join.
+Arbitrary per-node `needs` edges cannot be created from outputs in the
+same GitHub run. Nix schedules real derivation dependencies inside each job;
+the CI code only chooses groups and transfers completed outputs. The
+`nix-store --export`/`--import` closure handoff is lossless but may be
+expensive; evaluate archive sizes, cache transfer, duplicated derivations,
+cold and warm critical paths, and full shipping evidence before adoption.
+
+Alternatively, `flake-check-dag.py build` executes the complete check DAG
+within one Nix invocation on one runner, sharing every exact derivation
+locally and avoiding all inter-runner output transfer. Compare this reference
+case against the distributed DAG to determine if fan-out actually wins.
