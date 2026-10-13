@@ -17,7 +17,8 @@ def load_variant(count, directory):
         raise ValueError(f"invalid elapsed build time or pool size for {count} builders")
     checks = evidence.get("checks")
     if (evidence.get("mode") != "native-nix-dag" or not isinstance(checks, dict)
-            or not checks or not all(c.get("status") == "pass" for c in checks.values())):
+            or not checks or not all(isinstance(c, dict) and c.get("status") == "pass"
+                                      for c in checks.values())):
         raise ValueError(f"incomplete Nix check evidence for {count} builders")
     return {"count": count, "wall": seconds, "evidence": evidence}
 
@@ -38,8 +39,8 @@ def report(variants):
     output = [
         "## Distributed Nix builders: exact-head comparison",
         "",
-        f"Commit: \`{evidence['commit']}\`; checks: {len(evidence['checks'])}; "
-        f"platform: \`{evidence['system']}\`.",
+        f"Commit: `{evidence['commit']}`; checks: {len(evidence['checks'])}; "
+        f"platform: `{evidence['system']}`.",
         "",
         "| Remote workers | Nix build wall time | Speed vs smallest pool |",
         "| ---: | ---: | ---: |",
