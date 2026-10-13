@@ -47,6 +47,8 @@ in
     assert builtins.match ".*slots_per_worker: 2.*" remoteYaml != null;
     assert builtins.match ".*id-token: write.*" remoteYaml != null;
     assert builtins.match ".*TS_OAUTH_CLIENT_ID.*TS_AUDIENCE.*" remoteYaml != null;
+    assert builtins.match ".*vars.TS_OAUTH_CLIENT_ID.*" remoteYaml != null;
+    assert builtins.match ".*format.*api.tailscale.com.*" remoteYaml != null;
     assert builtins.match ".*TS_AUTHKEY.*" remoteYaml == null;
     assert builtins.match ".*pull_request:.*" remoteYaml == null;
     true;
