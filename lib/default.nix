@@ -2,6 +2,7 @@ let
   ciSchemaVersion = 3;
   mkCi = import ./mk-ci.nix;
   mkFlakeCheckConfig = import ./mk-flake-check-config.nix;
+  mkFlakeCiWorkflow = import ./mk-flake-ci-workflow.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
@@ -99,12 +100,13 @@ let
 in
 {
   version = "0.14.0";
-  tests = (import ./tests.nix) // (import ./nix-cache-tests.nix);
+  tests = (import ./tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix);
   inherit
     ciSchemaVersion
     maintenanceCommandGraph
     mkCi
     mkFlakeCheckConfig
+    mkFlakeCiWorkflow
     rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs

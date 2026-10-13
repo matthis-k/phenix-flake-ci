@@ -429,3 +429,14 @@ Alternatively, `flake-check-dag.py build` executes the complete check DAG
 within one Nix invocation on one runner, sharing every exact derivation
 locally and avoiding all inter-runner output transfer. Compare this reference
 case against the distributed DAG to determine if fan-out actually wins.
+
+## Declarative execution backend
+
+The library can generate a pinned GitHub Actions caller from a Nix policy. The
+same consumer flake still owns its checks. Choose `matrix`, `nix-dag`, or
+`nix-remote`, then render the thin workflow with `mkFlakeCiWorkflow`. The
+remote backend is restricted to trusted push/manual triggers. It never enables
+remote execution for untrusted pull requests.
+
+See [backend configuration](docs/ci-backends.md) for a complete example,
+credential policy, local execution and verification.

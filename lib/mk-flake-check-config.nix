@@ -4,6 +4,7 @@
   system,
   shardCount ? 4,
   strategy ? { },
+  ci ? null,
   checkHints ? { },
   prebuildTargets ? [ ],
   cache ? {
@@ -24,6 +25,8 @@ let
       fail "flake prebuildTargets must be a list of Nix installables"
     else if !(builtins.isAttrs cache) then
       fail "flake cache must be an attribute set"
+    else if ci != null && !builtins.isAttrs ci then
+      fail "flake ci policy must be an attribute set"
     else
       true;
 in
@@ -36,3 +39,4 @@ assert valid;
   checkHints = (strategy.checkHints or { }) // checkHints;
   prebuildTargets = (strategy.prebuildTargets or [ ]) ++ prebuildTargets;
 }
+// (if ci == null then { } else { inherit ci; })
