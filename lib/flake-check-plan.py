@@ -229,7 +229,7 @@ def verify_command(args):
     paths = sorted(Path(args.directory).rglob("evidence.json"))
     if len(paths) != len(expected):
         raise ValueError(f"expected {len(expected)} shard evidence files; received {len(paths)}")
-    if args.prebuild:
+    if getattr(args, "prebuild", None):
         prebuild = json.loads(Path(args.prebuild).read_text())
         if (prebuild.get("schemaVersion") != SCHEMA
                 or prebuild.get("commit") != plan["commit"]
@@ -238,9 +238,9 @@ def verify_command(args):
         outputs = prebuild.get("outputs", {})
         if not isinstance(outputs, dict) or set(outputs) != set(plan["prebuildTargets"]):
             raise ValueError("prebuild evidence is missing declared outputs")
-        for target, paths in outputs.items():
-            if not isinstance(paths, list) or not paths or not all(
-                    isinstance(x, str) and STORE.fullmatch(x) for x in paths):
+        for target, output_paths in outputs.items():
+            if not isinstance(output_paths, list) or not output_paths or not all(
+                    isinstance(x, str) and STORE.fullmatch(x) for x in output_paths):
                 raise ValueError(f"invalid prebuild outputs for {target}")
     seen = set()
     for path in paths:
