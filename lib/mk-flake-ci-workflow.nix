@@ -89,8 +89,8 @@ let
       "    secrets:"
       # Support client IDs stored as Actions secrets or variables. The
       # Tailscale OIDC audience is derived from the selected client ID.
-      "      TS_OAUTH_CLIENT_ID: " + "$" + "{{ secrets.TS_OAUTH_CLIENT_ID || vars.TS_OAUTH_CLIENT_ID }}"
-      "      TS_AUDIENCE: " + "$" + "{{ format('api.tailscale.com/{0}', secrets.TS_OAUTH_CLIENT_ID || vars.TS_OAUTH_CLIENT_ID) }}"
+      ("      TS_OAUTH_CLIENT_ID: " + "$" + "{{ secrets.TS_OAUTH_CLIENT_ID || vars.TS_OAUTH_CLIENT_ID }}")
+      ("      TS_AUDIENCE: " + "$" + "{{ format('api.tailscale.com/{0}', secrets.TS_OAUTH_CLIENT_ID || vars.TS_OAUTH_CLIENT_ID) }}")
     ] else [
       "    secrets:"
       (secret "TS_AUTHKEY")
