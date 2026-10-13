@@ -9,8 +9,12 @@ builders. No separate check registry or custom derivation scheduler.
 1. Create a Tailscale federated identity client authorized for the consuming
    GitHub repository/workflow, with writable auth_keys scope and tag:phenix-ci.
    See https://tailscale.com/docs/integrations/github/github-action .
-2. Add GitHub Actions repository secrets TS_OAUTH_CLIENT_ID and TS_AUDIENCE
-   containing the client ID and federation audience. No SSH private keys.
+2. Preferred: add GitHub Actions repository secrets TS_OAUTH_CLIENT_ID and
+   TS_AUDIENCE containing the federated client ID and audience (no SSH keys).
+   Simpler alternative: add just TS_AUTHKEY, containing a reusable, ephemeral,
+   pre-approved Tailscale auth key scoped to tag:phenix-ci. The reusable
+   workflow supports either method, but rejects ambiguous mixed credentials.
+   OIDC is preferred for recurring CI because it avoids stored bearer keys.
 3. Configure the tailnet policy to allow connectivity and Tailscale SSH from
    tag:phenix-ci to tag:phenix-ci as user runner. Merge this policy fragment
    into your existing tailnet rules (do not replace existing rules blindly):
@@ -39,7 +43,10 @@ jobs:
       config: ci/flake-check-config.nix
       worker_count: 4
       slots_per_worker: 2
-    secrets: inherit
+    secrets:
+      TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }} # OR the OIDC pair below
+      # TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      # TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
 ```
 
 Supported worker counts: 1–16, with one coordinator. The coordinator and
@@ -60,7 +67,7 @@ Trusted tailnet infrastructure must not execute arbitrary fork pull requests.
 Use protected or manually dispatched benchmarks. Tailscale policy and GitHub
 secrets are administration operations and are not available to the connected
 GitHub repository integration; they require a one-time operator action.
-Missing credentials cause an explicit preflight error, not a fake benchmark.
+Missing credentials cause an explicit preflight error, not a fake benchmark. Do not commit the actual TS_AUTHKEY to a YAML file or expose it in logs.
 
 The automated Python test suite validates host naming, matrix enumeration,
 SSH-store discovery and missing-worker failure. It cannot validate live
