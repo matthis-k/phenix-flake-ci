@@ -96,15 +96,24 @@ def make_plan(checks, config, commit):
     for pattern, hint in hints.items():
         if not isinstance(pattern, str) or not isinstance(hint, dict):
             raise ValueError("each check hint must be an attribute set")
-        if set(hint) - {"weight", "isolate"}:
+        if set(hint) - {"weight", "isolate", "affinity"}:
             raise ValueError("unknown check hint fields")
         if "weight" in hint and (type(hint["weight"]) is not int or hint["weight"] < 1):
             raise ValueError("check weight must be a positive integer")
         if "isolate" in hint and type(hint["isolate"]) is not bool:
             raise ValueError("check isolate flag must be boolean")
+        if "affinity" in hint and (not isinstance(hint["affinity"], str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", hint["affinity"])):
+            raise ValueError("check affinity must be a non-empty stable identifier")
 
-    # Isolated checks reserve one whole worker, typically for shipping checks.
+    # Isolated checks reserve one worker, typically for shipping. Non-isolated
+    # affinity groups run together on the same worker, so shared Nix derivations
+    # do not need to be built/restored separately in other shards. Affinity is a
+    # scheduling hint; the check inventory is still discovered from the flake.
     weighted = [(name, hint_for(name, hints)) for name in sorted(checks)]
+    for name, h in weighted:
+        if h.get("isolate", False) and "affinity" in h:
+            raise ValueError(f"check {name!r} cannot be isolated and affinity-grouped")
     isolated = [(name, h) for name, h in weighted if h.get("isolate", False)]
     rest = [(name, h) for name, h in weighted if not h.get("isolate", False)]
     if len(isolated) > count or (rest and len(isolated) == count):
@@ -115,11 +124,18 @@ def make_plan(checks, config, commit):
         slot["checks"] = [name]
         slot["weight"] = h.get("weight", 1)
     available = shards[len(isolated):]
-    # Longest-processing-time-first, fixed tie-breaking and integer weights.
-    for name, h in sorted(rest, key=lambda pair: (-pair[1].get("weight", 1), pair[0])):
+    units = {}
+    for name, hint in rest:
+        # Unique singleton keys cannot collide with named affinity groups.
+        key = ("affinity", hint["affinity"]) if "affinity" in hint else ("check", name)
+        unit = units.setdefault(key, {"checks": [], "weight": 0})
+        unit["checks"].append(name)
+        unit["weight"] += hint.get("weight", 1)
+    # Longest-processing-time-first over indivisible groups, deterministic ties.
+    for key, unit in sorted(units.items(), key=lambda pair: (-pair[1]["weight"], pair[0])):
         target = min(available, key=lambda slot: (slot["weight"], slot["id"]))
-        target["checks"].append(name)
-        target["weight"] += h.get("weight", 1)
+        target["checks"].extend(unit["checks"])
+        target["weight"] += unit["weight"]
     shards = [s for s in shards if s["checks"]]
     for shard in shards:
         shard["checks"].sort()
