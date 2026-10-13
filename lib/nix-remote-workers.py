@@ -86,6 +86,7 @@ def discover(args):
     end = time.monotonic() + positive(args.timeout, 1, 900)
     ready = {}
     discovered = {}
+    last_errors = {}
     while time.monotonic() < end and len(ready) < count:
         status = json.loads(invoke("tailscale", "status", "--json").stdout)
         present = peers(status)
@@ -103,7 +104,15 @@ def discover(args):
                 # Prove the ssh-ng store protocol works before accepting a worker.
                 invoke("sudo", "nix", "store", "ping", "--store",
                        f"ssh-ng://runner@{ip}", timeout=12)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                if isinstance(exc, subprocess.TimeoutExpired):
+                    reason = f"timeout after {exc.timeout}s"
+                else:
+                    reason = (exc.stderr or exc.stdout or
+                              f"exit status {exc.returncode}").strip()[:1200]
+                if last_errors.get(name) != reason:
+                    print(f"Nix ssh-ng probe failed for {name}: {reason}", flush=True)
+                    last_errors[name] = reason
                 continue
             ready[name] = ip
             print(f"Builder ready: {name}", flush=True)
