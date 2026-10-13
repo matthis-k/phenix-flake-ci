@@ -56,6 +56,9 @@ class RemoteBuildersTest(unittest.TestCase):
                  mock.patch.object(remote, "ssh_config") as sshconf:
                 remote.discover(args)
             self.assertEqual(runner.call_count, 3)
+            for call in runner.call_args_list[1:]:
+                self.assertEqual(call.args[:3], ("sudo", remote.LOCAL_NIX, "store"))
+                self.assertIn("remote-program=", call.args[5])
             sshconf.assert_called_once()
             lines = machines.read_text().splitlines()
             self.assertEqual(lines, [
