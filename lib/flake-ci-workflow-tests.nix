@@ -51,6 +51,19 @@ in
     assert builtins.match ".*pull_request:.*" remoteYaml == null;
     true;
 
+  remoteDefaultsToFourWorkersAndTwoSlots =
+    assert builtins.match ".*worker_count: 4.*" (flat (render { backend = "nix-remote"; })) != null;
+    assert builtins.match ".*slots_per_worker: 2.*" (flat (render { backend = "nix-remote"; })) != null;
+    true;
+
+  remoteRuntimeSlotLimitMatchesGenerator =
+    assert invalid (render (remote // { remote.slotsPerWorker = 0; }));
+    assert invalid (render (remote // { remote.slotsPerWorker = 33; }));
+    assert builtins.match ".*slots_per_worker: 32.*" (flat (render (remote // {
+      remote.slotsPerWorker = 32;
+    }))) != null;
+    true;
+
   authkeyUsesOnlyTheKeyButPreservesCalledWorkflowPermissions =
     assert builtins.match ".*TS_AUTHKEY.*" authkeyYaml != null;
     assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" authkeyYaml == null;
