@@ -334,3 +334,54 @@ declaration list; every changed target must have a changed workspace crate
 manifest. Any additional diff or parsing ambiguity restores the full-CI
 fallback. The normal Source check still verifies generated workflow
 synchronization.
+
+## Exact-head Nix check shards (experimental)
+
+The opt-in flake check planner discovers the consumer's evaluated
+`checks.<system>` attribute set at the checked-out commit. There is no
+second list of required checks in the workflow.
+
+A consumer injects a toolchain strategy through a Nix parameter:
+
+```nix
+let
+  ci = import ./vendor/phenix-flake-ci/lib/default.nix;
+in
+ci.mkFlakeCheckConfig {
+  system = "x86_64-linux";
+  shardCount = 4;
+  strategy = ci.rustCheckStrategy {
+    workspace = "rust";
+    prebuildTargets = [ ".#kernel" ".#test-runner" ];
+  };
+  checkHints."release-shipping" = { isolate = true; weight = 200; };
+}
+```
+
+Other languages can provide the same strategy attributes without changes to
+the generic planner. `checkHints` changes scheduling only. Any new check
+still enters the evaluated inventory. The Rust helper is deliberately small:
+Cargo reverse-dependency impact continues to use the existing
+`cargo-impact.py` with its fail-full fallback.
+
+```sh
+nix eval --json --file ci/check-config.nix > config.json
+python3 lib/flake-check-plan.py plan --config config.json --output plan.json
+python3 lib/flake-check-plan.py prebuild --config config.json --output prebuild.json
+python3 lib/flake-check-plan.py build --plan plan.json --shard shard-00 --output evidence.json
+python3 lib/flake-check-plan.py verify --plan plan.json --directory ci-evidence
+python3 lib/test-flake-check-plan.py -v
+```
+
+`plan` emits a versioned SHA-256 manifest and GitHub matrix output. Each
+worker builds actual Nix checks and writes evidence; the final verifier rejects
+missing, duplicate, failed, stale, or forged check results. A failed worker
+does not count as success because a cache restored a build. The workflow must
+upload one `evidence.json` per shard, including on failure.
+
+Cache policy is an execution concern: prebuild a small set of Nix packages in
+one writer job, then restore its cache read-only in shard jobs. Configure cache
+keys using runner platform and lockfiles, with Nix store paths as the reusable
+objects. Save from trusted revisions when publishing to a shared binary cache.
+This prototype still requires exact-head workflow, cold/warm cache, and
+shipping-evidence parity verification before replacing a required gate.
