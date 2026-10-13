@@ -34,6 +34,9 @@ jobs:
       - name: Test exact-head Nix check planner
         run: python3 lib/test-flake-check-plan.py -v
 
+      - name: Test generated native Nix DAG scheduler
+        run: python3 lib/test-flake-check-dag.py -v
+
       - name: Print exact consumer flake source identity
         if: github.ref == 'refs/heads/main'
         run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"
