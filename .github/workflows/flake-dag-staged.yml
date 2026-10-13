@@ -1,0 +1,244 @@
+# Experimental generated DAG: fan out independent Nix checks, then join them.
+# The consumer's flake is the only source of check and build dependencies.
+name: Generated Nix DAG check pipeline
+on:
+  workflow_call:
+    inputs:
+      config:
+        type: string
+        required: true
+      library_ref:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-dag-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Generate and cache exact-head Nix dependency DAG
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.stages.outputs.matrix }}
+      digest: ${{ steps.plan.outputs.digest }}
+      cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve all exact-head Nix checks
+        id: plan
+        env:
+          CONFIG_FILE: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-plan
+          nix eval --json --file "$CONFIG_FILE" > ci-plan/config.json
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py plan \
+            --config ci-plan/config.json --output ci-plan/plan.json
+      - name: Restore identical evaluated DAG
+        id: cached_dag
+        uses: actions/cache/restore@v4
+        with:
+          path: ci-plan/graph.json
+          key: nix-derivation-dag-${{ runner.os }}-${{ github.sha }}-${{ steps.plan.outputs.digest }}
+      - name: Generate dependency graph from Nix only on cache miss
+        if: steps.cached_dag.outputs.cache-hit != 'true'
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
+            --plan ci-plan/plan.json --output ci-plan/graph.json
+      - name: Cache immutable evaluated DAG
+        if: steps.cached_dag.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ci-plan/graph.json
+          key: nix-derivation-dag-${{ runner.os }}-${{ github.sha }}-${{ steps.plan.outputs.digest }}
+      - name: Generate ready-check fan-out and final dependent checks
+        id: stages
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py plan \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --output ci-plan/stages.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan/
+          if-no-files-found: error
+
+  shared:
+    name: Shared expensive derivation frontier
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - name: Restore and publish shared Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          gc-max-store-size-linux: "4G"
+      - name: Build compatible shared artifacts concurrently
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
+            --plan ci-plan/plan.json --output ci-plan/prebuild.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan/prebuild.json
+          if-no-files-found: error
+
+  leaf:
+    name: Ready Nix checks ${{ matrix.id }}
+    needs: [plan, shared]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan
+      - name: Restore shared Nix cache read-only
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - name: Ensure declared shared paths already exist
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
+            --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+      - name: Build all ready checks assigned to this worker
+        env:
+          SHARD: ${{ matrix.id }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py leaf \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --stages ci-plan/stages.json --shard "$SHARD" \
+            --prebuild ci-plan/prebuild.json \
+            --archive "dag-leaf/store.nar" --output "dag-leaf/evidence.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dag-leaf-${{ matrix.id }}
+          path: dag-leaf/
+          if-no-files-found: error
+
+  join:
+    name: Import completed outputs and run dependent shipping checks
+    if: always()
+    needs: [plan, shared, leaf]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful DAG predecessors
+        env:
+          PLAN_STATUS: ${{ needs.plan.result }}
+          SHARED_STATUS: ${{ needs.shared.result }}
+          LEAF_STATUS: ${{ needs.leaf.result }}
+        run: |
+          test "$PLAN_STATUS" = success
+          test "$SHARED_STATUS" = success
+          test "$LEAF_STATUS" = success
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dag-leaf-*
+          path: dag-leaves
+      - name: Restore shared base Nix cache
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - name: Verify shared prerequisite closure
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
+            --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+      - name: Import completed check outputs and build dependent roots
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py join \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --stages ci-plan/stages.json --leaves dag-leaves \
+            --output dag-final/evidence.json
+      - name: Exact-head DAG evidence gate
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --stages ci-plan/stages.json --evidence dag-final/evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: nix-dag-final-evidence
+          path: dag-final/evidence.json
+          if-no-files-found: error
