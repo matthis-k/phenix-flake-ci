@@ -57,6 +57,26 @@ def hint_for(name, hints):
     return result
 
 
+def cache_prefix(config):
+    cache = config.get("cache", {})
+    if not isinstance(cache, dict):
+        raise ValueError("cache policy must be an attribute set")
+    prefix = cache.get("keyPrefix", "flake-checks")
+    if not isinstance(prefix, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+        raise ValueError("invalid cache key prefix")
+    files = cache.get("keyFiles", [])
+    if not isinstance(files, list) or not all(isinstance(x, str) for x in files):
+        raise ValueError("cache.keyFiles must be a list of paths")
+    identities = []
+    for filename in files:
+        candidate = Path(filename)
+        if candidate.is_absolute() or ".." in candidate.parts or not candidate.is_file():
+            raise ValueError(f"invalid or absent cache key input: {filename}")
+        identities.append([filename, hashlib.sha256(candidate.read_bytes()).hexdigest()])
+    identity = digest({"keyFiles": sorted(identities), "strategy": config.get("strategy", "generic")})
+    return f"{prefix}-{config['system']}-{identity[:20]}"
+
+
 def make_plan(checks, config, commit):
     validate_inventory(checks)
     if not isinstance(config, dict) or config.get("schemaVersion") != SCHEMA:
@@ -102,12 +122,18 @@ def make_plan(checks, config, commit):
     shards = [s for s in shards if s["checks"]]
     for shard in shards:
         shard["checks"].sort()
+    targets = config.get("prebuildTargets", [])
+    if not isinstance(targets, list) or not all(isinstance(x, str) and x.startswith(".#") for x in targets):
+        raise ValueError("prebuildTargets must contain only local flake installables")
     result = {
         "schemaVersion": SCHEMA,
         "commit": commit,
         "system": system,
         "checks": dict(sorted(checks.items())),
         "shards": shards,
+        "prebuildTargets": targets,
+        "cachePrefix": cache_prefix(config),
+        "configDigest": digest(config),
     }
     result["digest"] = digest(result)
     return result
@@ -115,7 +141,7 @@ def make_plan(checks, config, commit):
 
 def validate_plan(plan):
     checksum = plan.get("digest")
-    if checksum != digest({k: v for k, v in plan.items() if k != "digest"}):
+    if plan.get("schemaVersion") != SCHEMA or checksum != digest({k: v for k, v in plan.items() if k != "digest"}):
         raise ValueError("plan digest mismatch")
     validate_inventory(plan.get("checks"))
     seen = []
@@ -147,6 +173,7 @@ def plan_command(args):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf8") as output:
             output.write("matrix=" + canonical(matrix) + "\n")
             output.write("digest=" + plan["digest"] + "\n")
+            output.write("cache_prefix=" + plan["cachePrefix"] + "\n")
     print(f"{len(plan['checks'])} Nix checks in {len(plan['shards'])} shards; {plan['digest']}")
 
 
@@ -179,20 +206,19 @@ def build_command(args):
 
 
 def prebuild_command(args):
-    config = json.loads(Path(args.config).read_text())
-    if config.get("schemaVersion") != SCHEMA:
-        raise ValueError("unsupported prebuild configuration")
-    targets = config.get("prebuildTargets", [])
-    if not isinstance(targets, list) or not all(isinstance(x, str) and x.startswith(".#") for x in targets):
-        raise ValueError("prebuildTargets must be local flake installables")
+    plan = json.loads(Path(args.plan).read_text())
+    validate_plan(plan)
     commit = run_command(["git", "rev-parse", "HEAD"])
+    if commit != plan["commit"]:
+        raise ValueError("prebuild checkout does not match the plan")
     results = {}
-    for target in targets:
+    for target in plan["prebuildTargets"]:
         outputs = run_command(["nix", "build", "--no-link", "--print-out-paths", "-L", target]).splitlines()
         if not outputs or not all(STORE.fullmatch(path) for path in outputs):
             raise ValueError(f"prebuild target {target!r} returned invalid store paths")
         results[target] = outputs
-    write_json(args.output, {"schemaVersion": SCHEMA, "commit": commit, "outputs": results})
+    write_json(args.output, {"schemaVersion": SCHEMA, "digest": plan["digest"],
+                             "commit": commit, "outputs": results})
     print(f"Prebuilt {len(results)} shared Nix targets at {commit}")
 
 
@@ -203,6 +229,19 @@ def verify_command(args):
     paths = sorted(Path(args.directory).rglob("evidence.json"))
     if len(paths) != len(expected):
         raise ValueError(f"expected {len(expected)} shard evidence files; received {len(paths)}")
+    if args.prebuild:
+        prebuild = json.loads(Path(args.prebuild).read_text())
+        if (prebuild.get("schemaVersion") != SCHEMA
+                or prebuild.get("commit") != plan["commit"]
+                or prebuild.get("digest") != plan["digest"]):
+            raise ValueError("prebuild evidence is stale or mismatched")
+        outputs = prebuild.get("outputs", {})
+        if not isinstance(outputs, dict) or set(outputs) != set(plan["prebuildTargets"]):
+            raise ValueError("prebuild evidence is missing declared outputs")
+        for target, paths in outputs.items():
+            if not isinstance(paths, list) or not paths or not all(
+                    isinstance(x, str) and STORE.fullmatch(x) for x in paths):
+                raise ValueError(f"invalid prebuild outputs for {target}")
     seen = set()
     for path in paths:
         evidence = json.loads(path.read_text())
@@ -241,12 +280,13 @@ def main():
     p.add_argument("--output", required=True)
     p.set_defaults(func=build_command)
     p = subs.add_parser("prebuild")
-    p.add_argument("--config", required=True)
+    p.add_argument("--plan", required=True)
     p.add_argument("--output", required=True)
     p.set_defaults(func=prebuild_command)
     p = subs.add_parser("verify")
     p.add_argument("--plan", required=True)
     p.add_argument("--directory", required=True)
+    p.add_argument("--prebuild", help="Require matching shared build evidence")
     p.set_defaults(func=verify_command)
     args = parser.parse_args()
     try:
