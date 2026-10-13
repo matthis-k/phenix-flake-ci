@@ -15,6 +15,14 @@ import time
 
 SYSTEMS = {"x86_64-linux", "aarch64-linux"}
 COMPLETION = "/tmp/phenix-flake-ci-finished"
+# GitHub's non-interactive SSH shells do not source /etc/profile.d/nix.sh.
+# Use the absolute executable installed by cachix/install-nix-action.
+REMOTE_DAEMON = "/nix/var/nix/profiles/default/bin/nix-daemon"
+
+
+def store_uri(ip):
+    return f"ssh-ng://runner@{ip}?remote-program={REMOTE_DAEMON}"
+
 
 
 def positive(value, minimum=1, maximum=16):
@@ -103,7 +111,7 @@ def discover(args):
             try:
                 # Prove the ssh-ng store protocol works before accepting a worker.
                 invoke("sudo", "nix", "store", "ping", "--store",
-                       f"ssh-ng://runner@{ip}", timeout=12)
+                       store_uri(ip), timeout=12)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 if isinstance(exc, subprocess.TimeoutExpired):
                     reason = f"timeout after {exc.timeout}s"
@@ -125,7 +133,7 @@ def discover(args):
     slots = positive(args.slots, 1, 32)
     # Format: URI system SSH-key maxJobs speedFactor supportedFeatures mandatoryFeatures
     machine_file.write_text("".join(
-        f"ssh-ng://runner@{ready[name]} {args.system} - {slots} 1 - -\n"
+        f"{store_uri(ready[name])} {args.system} - {slots} 1 - -\n"
         for name in names
     ))
     Path(args.hosts).write_text(json.dumps(ready, sort_keys=True) + "\n")
