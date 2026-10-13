@@ -1,6 +1,6 @@
 # Flake-aware CI roadmap
 
-Status: design proposed, implementation not started
+Status: FC1 and FC3 implementation in progress on the PR branch; exact-head CI and consumer parity pending
 Consumer: [phenix-ai](https://github.com/matthis-k/phenix-ai)
 Baseline: [M1 CI matrix rollout](https://github.com/matthis-k/phenix-ai/blob/impl/m1-basic-acp/spec/m1-ci-matrix.md)
 
@@ -49,8 +49,7 @@ required inventory. The final gate compares the plan against the evaluated
 Nix check set. A newly added check cannot disappear because a workflow's
 static list was not updated.
 
-The manifest format and generated workflow input are proposed contracts, not
-current `mkCi` features. Start with a single supported system and flake.
+The optional `mkFlakeCheckConfig` now builds a versioned scheduling config.\n`lib/flake-check-plan.py` discovers check derivations, shards the full inventory,\nand verifies shard evidence. The existing semantic `mkCi` interface is unchanged.\nThis is not yet a generated workflow or a verified shipping replacement. Start with a single supported system and flake.
 Do not require consumers to adopt flake-parts or a new Nix framework.
 
 ### Planning
