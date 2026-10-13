@@ -36,6 +36,35 @@ class TestFlakeChecks(unittest.TestCase):
         self.assertEqual(plan, planner.make_plan(checks(*reversed(names)), CONFIG, SHA))
         planner.validate_plan(plan)
 
+    def test_affinity_colocates_checks_with_shared_nix_builds(self):
+        cfg = {**CONFIG, "checkHints": {
+            "*shipping*": {"isolate": True, "weight": 100},
+            "b2-*": {"affinity": "state", "weight": 3},
+            "b3-*": {"affinity": "state", "weight": 2},
+            "f*": {"affinity": "frontend"},
+        }}
+        checkset = checks("m1-shipping", "b2-session", "b2-sqlite",
+                          "b3-memory", "f1-frontends", "f2-acp", "z")
+        plan = planner.make_plan(checkset, cfg, SHA)
+        assignments = {name: shard["id"] for shard in plan["shards"]
+                       for name in shard["checks"]}
+        self.assertEqual(len(assignments), len(checkset))
+        self.assertEqual({assignments[k] for k in
+                          ("b2-session", "b2-sqlite", "b3-memory")},
+                         {assignments["b2-session"]})
+        self.assertEqual(assignments["f1-frontends"], assignments["f2-acp"])
+        self.assertEqual(plan["shards"][0]["checks"], ["m1-shipping"])
+        self.assertEqual(plan, planner.make_plan(dict(reversed(list(checkset.items()))),
+                                                  cfg, SHA))
+        planner.validate_plan(plan)
+
+    def test_affinity_rejects_malformed_and_conflicting_hints(self):
+        for hint in ({"affinity": ""}, {"affinity": "../../bad"},
+                     {"affinity": "state", "isolate": True}):
+            cfg = {**CONFIG, "checkHints": {"a": hint}}
+            with self.subTest(hint=hint), self.assertRaises(ValueError):
+                planner.make_plan(checks("a"), cfg, SHA)
+
     def test_no_silent_missing_or_duplicate_checks(self):
         plan = planner.make_plan(checks("a", "b", "c"), CONFIG, SHA)
         plan["shards"][0]["checks"].append("a")
