@@ -177,6 +177,25 @@ def build_command(args):
         write_json(args.output, evidence)
 
 
+
+def prebuild_command(args):
+    config = json.loads(Path(args.config).read_text())
+    if config.get("schemaVersion") != SCHEMA:
+        raise ValueError("unsupported prebuild configuration")
+    targets = config.get("prebuildTargets", [])
+    if not isinstance(targets, list) or not all(isinstance(x, str) and x.startswith(".#") for x in targets):
+        raise ValueError("prebuildTargets must be local flake installables")
+    commit = run_command(["git", "rev-parse", "HEAD"])
+    results = {}
+    for target in targets:
+        outputs = run_command(["nix", "build", "--no-link", "--print-out-paths", "-L", target]).splitlines()
+        if not outputs or not all(STORE.fullmatch(path) for path in outputs):
+            raise ValueError(f"prebuild target {target!r} returned invalid store paths")
+        results[target] = outputs
+    write_json(args.output, {"schemaVersion": SCHEMA, "commit": commit, "outputs": results})
+    print(f"Prebuilt {len(results)} shared Nix targets at {commit}")
+
+
 def verify_command(args):
     plan = json.loads(Path(args.plan).read_text())
     validate_plan(plan)
@@ -221,6 +240,10 @@ def main():
     p.add_argument("--shard", required=True)
     p.add_argument("--output", required=True)
     p.set_defaults(func=build_command)
+    p = subs.add_parser("prebuild")
+    p.add_argument("--config", required=True)
+    p.add_argument("--output", required=True)
+    p.set_defaults(func=prebuild_command)
     p = subs.add_parser("verify")
     p.add_argument("--plan", required=True)
     p.add_argument("--directory", required=True)
