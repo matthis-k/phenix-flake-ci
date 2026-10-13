@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for generic Nix sharding and exact-head evidence."""
 import importlib.util
+import os
 import json
 import tempfile
 import unittest
@@ -81,6 +82,44 @@ class TestFlakeChecks(unittest.TestCase):
             planner.write_json(one, data)
             one.unlink()
             with self.assertRaisesRegex(ValueError, "expected"):
+                planner.verify_command(args)
+
+
+    def test_cache_key_uses_declared_inputs_without_source_sha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = Path.cwd()
+            try:
+                os.chdir(tmp)
+                Path("Cargo.lock").write_text("version one")
+                cfg = {**CONFIG, "cache": {"keyPrefix": "rust", "keyFiles": ["Cargo.lock"]}}
+                first = planner.make_plan(checks("a"), cfg, SHA)
+                self.assertTrue(first["cachePrefix"].startswith("rust-x86_64-linux-"))
+                changed_commit = planner.make_plan(checks("a"), cfg, "d" * 40)
+                self.assertEqual(first["cachePrefix"], changed_commit["cachePrefix"])
+                Path("Cargo.lock").write_text("version two")
+                after = planner.make_plan(checks("a"), cfg, SHA)
+                self.assertNotEqual(first["cachePrefix"], after["cachePrefix"])
+            finally:
+                os.chdir(previous)
+
+    def test_prebuild_artifacts_are_required_and_authenticated(self):
+        cfg = {**CONFIG, "prebuildTargets": [".#kernel"]}
+        plan = planner.make_plan(checks("a"), cfg, SHA)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            planner.write_json(root / "plan.json", plan)
+            planner.write_json(root / "s0" / "evidence.json",
+                               self.evidence(plan, plan["shards"][0]))
+            # Single-check inventory means one shard despite shardCount=3.
+            pre = {"schemaVersion": 1, "digest": plan["digest"], "commit": SHA,
+                   "outputs": {".#kernel": ["/nix/store/" + "d" * 32 + "-kernel"]}}
+            planner.write_json(root / "prebuild.json", pre)
+            args = type("Args", (), {"plan": root / "plan.json",
+                                    "directory": root, "prebuild": root / "prebuild.json"})
+            planner.verify_command(args)
+            pre["outputs"] = {}
+            planner.write_json(root / "prebuild.json", pre)
+            with self.assertRaisesRegex(ValueError, "missing"):
                 planner.verify_command(args)
 
     def test_skipped_and_forged_passes_fail(self):
