@@ -42,7 +42,7 @@ lib.flakeCiWorkflow =
   phenix-flake-ci.lib.mkFlakeCiWorkflow {
     ci = checkConfig.ci;
     configPath = "ci/flake-check-config.nix";
-    libraryRef = "0123456789abcdef0123456789abcdef01234567"; # Replace with the tested upstream commit
+    libraryRef = phenix-flake-ci.rev; # Locked commit, supplied by Nix
   };
 ```
 
@@ -53,9 +53,11 @@ nix eval --raw .#lib.flakeCiWorkflow > .github/workflows/flake-ci.yml
 git add .github/workflows/flake-ci.yml ci/flake-check-config.nix
 ```
 
-Use the *same tested commit* for `libraryRef`, the pinned reusable workflow,
-and the consumer's `phenix-flake-ci` flake input. The generator accepts only a
+Read `libraryRef` from the locked `phenix-flake-ci` flake input's `rev`.
+This keeps the reusable workflow and library checkout on the same immutable
+commit without copying a SHA into another file. The generator accepts only a
 40-character lowercase Git SHA and writes both GitHub references from it.
+For non-GitHub or local inputs without `rev`, pass an explicit tested commit.
 Generated callers cannot select a mutable branch or tag.
 
 ## Backends
