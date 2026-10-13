@@ -86,8 +86,10 @@ fork code must not run on trusted tailnet builders. The wrapper grants
 remote-builder workflow requests that permission. Its token is only used
 when `credentials = "oidc"`.
 
-Configure Tailscale federated identity with the GitHub secrets
-`TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`, plus the `tag:phenix-ci`
+Configure Tailscale federated identity with `TS_OAUTH_CLIENT_ID` as
+a GitHub Actions secret or repository variable. The generated caller derives
+`TS_AUDIENCE = api.tailscale.com/<client-id>` from that value, so no
+separate audience setting is needed. Configure the `tag:phenix-ci`
 tag owner and SSH grants described in
 [distributed Nix builders](distributed-nix-builders.md). To use a tagged
 ephemeral authentication key instead, set `credentials = "authkey"` and
