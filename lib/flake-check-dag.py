@@ -57,7 +57,8 @@ def graph_summary(plan, raw):
         if drv in parents:
             raise ValueError("derivation graph has duplicate normalized paths")
         if not isinstance(attrs, dict) or not isinstance(attrs.get("inputDrvs"), dict):
-            raise ValueError(f"derivation lacks inputDrvs: {raw_drv}")
+            fields = sorted(attrs) if isinstance(attrs, dict) else type(attrs).__name__
+            raise ValueError(f"derivation lacks inputDrvs: {raw_drv}; fields={fields}")
         parents[drv] = set(map(normalize, attrs["inputDrvs"]))
     for drv, deps in parents.items():
         if not deps <= parents.keys():
