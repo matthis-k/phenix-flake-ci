@@ -43,6 +43,9 @@ jobs:
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
 
+      - name: Test exact-head remote benchmark comparator
+        run: python3 lib/test-compare-remote-benchmarks.py -v
+
       - name: Print exact consumer flake source identity
         if: github.ref == 'refs/heads/main'
         run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"

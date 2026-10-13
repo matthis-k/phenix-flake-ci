@@ -106,6 +106,19 @@ class RemoteBuildersTest(unittest.TestCase):
             self.assertEqual(output.getvalue().count("remote Nix store denied"), 1)
             self.assertFalse(Path(args.machines).exists())
 
+    def test_reusable_workflow_uses_distinct_artifacts_for_each_pool_size(self):
+        # Reusable calls run in the *same* GitHub workflow run. artifact v4
+        # refuses duplicate names, including across sequential 2/4/8 calls.
+        workflow = (Path(__file__).parent.parent / ".github/workflows/flake-nix-builders.yml").read_text()
+        self.assertEqual(
+            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 3
+        )
+        self.assertEqual(
+            workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}"), 2
+        )
+        self.assertNotIn("name: remote-nix-plan\n", workflow)
+        self.assertNotIn("name: remote-nix-evidence\n", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

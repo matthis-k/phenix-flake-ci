@@ -71,7 +71,7 @@ jobs:
             --plan ci-plan/plan.json --output ci-plan/graph.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: remote-nix-plan
+          name: remote-nix-plan-${{ inputs.worker_count }}
           path: ci-plan/
           if-no-files-found: error
 
@@ -142,7 +142,7 @@ jobs:
             trusted-users = root runner
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: remote-nix-plan
+          name: remote-nix-plan-${{ inputs.worker_count }}
           path: ci-plan/
       - name: Name coordinator uniquely for this invocation
         id: node
@@ -185,7 +185,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: remote-nix-evidence
+          name: remote-nix-evidence-${{ inputs.worker_count }}
           path: ci-result/
           if-no-files-found: warn
 
@@ -212,11 +212,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: remote-nix-plan
+          name: remote-nix-plan-${{ inputs.worker_count }}
           path: ci-plan/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: remote-nix-evidence
+          name: remote-nix-evidence-${{ inputs.worker_count }}
           path: ci-result/
       - name: Independently verify all check outputs and commit identity
         run: |
