@@ -134,12 +134,14 @@ def closure(paths):
     items = planner.run_command(["nix-store", "--query", "--requisites", *paths]).splitlines()
     if not all(planner.STORE.fullmatch(x) for x in items):
         raise ValueError("Nix reported invalid store closure")
-    return set(items)
+    # Preserve Nix's requisites order for a valid self-contained export.
+    return list(dict.fromkeys(items))
 
 def export_incremental_archive(checks, shared, filename):
-    """Export all new store objects, excluding the shared base cache closure."""
+    """Export new objects in dependency order, excluding the shared closure."""
     roots = sorted(set(out for item in checks.values() for out in item["outputs"]))
-    incremental = sorted(closure(roots) - closure(shared))
+    excluded = set(closure(shared))
+    incremental = [item for item in closure(roots) if item not in excluded]
     target = Path(filename)
     target.parent.mkdir(parents=True, exist_ok=True)
     # Encode a complete independent delta: a consumer restores shared closure
