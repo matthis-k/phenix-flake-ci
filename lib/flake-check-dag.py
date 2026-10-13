@@ -32,6 +32,13 @@ def save(path, payload):
 
 def graph_summary(plan, raw):
     """Check-level dependency closure through intermediate Nix derivations."""
+    # Nix 2.3x emits protocol v3 as {"version": 3,
+    # "derivations": { "<store-hash-name>": {...} }}. Earlier versions
+    # emitted the path map directly. Both contain inputDrvs.
+    if isinstance(raw, dict) and "derivations" in raw:
+        if not isinstance(raw["derivations"], dict):
+            raise ValueError("invalid versioned derivation graph")
+        raw = raw["derivations"]
     if not isinstance(raw, dict) or not raw or len(raw) > 100000:
         raise ValueError("invalid or unbounded recursive derivation graph")
     def normalize(path):
