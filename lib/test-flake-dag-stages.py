@@ -64,7 +64,8 @@ class StagedDagTests(unittest.TestCase):
         def fake_run(args):
             if args[:3] != ["nix-store", "--query", "--requisites"]:
                 raise ValueError(args)
-            return "\n".join(sorted({store("a", "model"), store("b", "dependency")}))
+            return ("\n".join(sorted({store("a", "model"), store("b", "dependency")}))
+                    if store("a", "model") in args else store("b", "dependency"))
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "outputs.nar"
             with mock.patch.object(stages.planner, "run_command", side_effect=fake_run), mock.patch.object(
