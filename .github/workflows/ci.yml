@@ -37,6 +37,9 @@ jobs:
       - name: Test generated native Nix DAG scheduler
         run: python3 lib/test-flake-check-dag.py -v
 
+      - name: Test generated DAG stages and store transfers
+        run: python3 lib/test-flake-dag-stages.py -v
+
       - name: Print exact consumer flake source identity
         if: github.ref == 'refs/heads/main'
         run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"
