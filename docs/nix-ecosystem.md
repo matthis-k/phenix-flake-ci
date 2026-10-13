@@ -56,7 +56,7 @@ For a consumer that already uses flake-parts:
 
 ```nix
 # Within the existing flake-parts mkFlake module:
-{
+{ inputs, ... }: {
   systems = [ "x86_64-linux" ];
 
   perSystem = { pkgs, ... }: {
