@@ -58,6 +58,23 @@ class StagedDagTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid derived"):
             stages.partition(plan, graph)
 
+    def test_each_worker_submits_all_roots_in_one_native_nix_invocation(self):
+        plan, _ = sample()
+        selected = ["model", "tools"]
+        json_output = [
+            {"drvPath": plan["checks"][name],
+             "outputs": {"out": store("x", name)}}
+            for name in selected
+        ]
+        with mock.patch.object(stages.subprocess, "check_output",
+                               return_value=json.dumps(json_output)) as nix:
+            realized = stages.build_selected(plan, selected)
+        self.assertEqual(set(realized), set(selected))
+        nix.assert_called_once_with(
+            ["nix", "build", "--no-link", "--json", "-L",
+             ".#checks.x86_64-linux.model", ".#checks.x86_64-linux.tools"],
+            text=True)
+
     def test_export_closure_subtracts_shared_paths(self):
         checks = {"model": {"outputs": [store("a", "model")]}}
         shared = [store("b", "dependency")]
