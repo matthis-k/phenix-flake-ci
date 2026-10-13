@@ -79,8 +79,10 @@ connection is needed for local execution.
 
 The remote backend defaults to push to `main` and manual
 `workflow_dispatch`. It rejects `pull_request` triggers, since untrusted
-fork code must not run on trusted tailnet builders. The wrapper emits
-`id-token: write` only when `credentials = "oidc"`.
+fork code must not run on trusted tailnet builders. The wrapper grants
+`id-token: write` for both credential modes because the existing reusable
+remote-builder workflow requests that permission. Its token is only used
+when `credentials = "oidc"`.
 
 Configure Tailscale federated identity with the GitHub secrets
 `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`, plus the `tag:phenix-ci`

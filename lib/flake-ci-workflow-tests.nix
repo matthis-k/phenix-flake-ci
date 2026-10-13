@@ -51,10 +51,10 @@ in
     assert builtins.match ".*pull_request:.*" remoteYaml == null;
     true;
 
-  authkeyDoesNotRequireOidcPermissions =
+  authkeyUsesOnlyTheKeyButPreservesCalledWorkflowPermissions =
     assert builtins.match ".*TS_AUTHKEY.*" authkeyYaml != null;
     assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" authkeyYaml == null;
-    assert builtins.match ".*id-token: write.*" authkeyYaml == null;
+    assert builtins.match ".*id-token: write.*" authkeyYaml != null;
     true;
 
   remotePullRequestsRejected =

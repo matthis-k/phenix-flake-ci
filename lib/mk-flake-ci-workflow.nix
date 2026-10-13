@@ -97,7 +97,7 @@ let
     [ "name: ${builtins.toJSON name}" "on:" ]
     ++ eventLines
     ++ [ "" "permissions:" "  contents: read" ]
-    ++ (if remoteSelected && credentials == "oidc" then [ "  id-token: write" ] else [ ])
+    ++ (if remoteSelected then [ "  id-token: write" ] else [ ])
     ++ [
       ""
       "jobs:"
