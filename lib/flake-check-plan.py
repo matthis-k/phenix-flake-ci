@@ -212,9 +212,17 @@ def prebuild_command(args):
     commit = run_command(["git", "rev-parse", "HEAD"])
     if commit != plan["commit"]:
         raise ValueError("prebuild checkout does not match the plan")
+    targets = plan["prebuildTargets"]
+    # One Nix invocation schedules independent derivations concurrently.
+    # Previously one Nix build per target serialized otherwise independent
+    # packages on the critical path of all shards.
+    if targets:
+        subprocess.run(["nix", "build", "--no-link", "-L", *targets], check=True)
     results = {}
-    for target in plan["prebuildTargets"]:
-        outputs = run_command(["nix", "build", "--no-link", "--print-out-paths", "-L", target]).splitlines()
+    for target in targets:
+        # Read realized store identity only after the combined build. This
+        # evaluation does not recompile successfully realized derivations.
+        outputs = run_command(["nix", "build", "--no-link", "--print-out-paths", target]).splitlines()
         if not outputs or not all(STORE.fullmatch(path) for path in outputs):
             raise ValueError(f"prebuild target {target!r} returned invalid store paths")
         results[target] = outputs
