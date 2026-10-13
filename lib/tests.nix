@@ -9,6 +9,18 @@ let
     };
 
   mkCi = import ./mk-ci.nix;
+  mkFlakeCheckConfig = import ./mk-flake-check-config.nix;
+  rustCheckStrategy = import ./rust-check-strategy.nix;
+  strategyConfig = mkFlakeCheckConfig {
+    system = "x86_64-linux";
+    shardCount = 4;
+    strategy = rustCheckStrategy {
+      workspace = "rust";
+      prebuildTargets = [ ".#kernel" ];
+    };
+    checkHints."m1-shipping" = { isolate = true; weight = 200; };
+  };
+
 
   commands = {
     leaf = {
@@ -246,6 +258,15 @@ let
   impactedWorkflowFlat = builtins.replaceStrings [ "\n" ] [ " " ] impactedWorkflow;
 in
 {
+  injectedStrategyOnlySuppliesSchedulingMetadata =
+    assert strategyConfig.schemaVersion == 1;
+    assert strategyConfig.shardCount == 4;
+    assert strategyConfig.strategy == "rust";
+    assert strategyConfig.prebuildTargets == [ ".#kernel" ];
+    assert strategyConfig.checkHints."m1-shipping".weight == 200;
+    assert strategyConfig.checkHints."*shipping*".isolate;
+    true;
+
   leafClosureIsScoped =
     assert leafInputs == [ "leaf-tool" ];
     assert !(builtins.elem "sibling-tool" leafInputs);
