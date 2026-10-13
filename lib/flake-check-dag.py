@@ -34,16 +34,27 @@ def graph_summary(plan, raw):
     """Check-level dependency closure through intermediate Nix derivations."""
     if not isinstance(raw, dict) or not raw or len(raw) > 100000:
         raise ValueError("invalid or unbounded recursive derivation graph")
+    def normalize(path):
+        # Nix 2.2x and 2.3x JSON formats differ: newer derivation JSON
+        # sometimes uses store-relative derivation keys.
+        if not isinstance(path, str):
+            raise ValueError("non-string Nix derivation reference")
+        full = path if path.startswith("/nix/store/") else "/nix/store/" + path
+        if not STORE.fullmatch(full) or not full.endswith(".drv"):
+            raise ValueError(f"invalid derivation graph node: {path!r}")
+        return full
+
     parents = {}
-    for drv, attrs in raw.items():
-        if not isinstance(drv, str) or not STORE.fullmatch(drv) or not drv.endswith(".drv"):
-            raise ValueError(f"invalid derivation graph node: {drv!r}")
+    for raw_drv, attrs in raw.items():
+        drv = normalize(raw_drv)
+        if drv in parents:
+            raise ValueError("derivation graph has duplicate normalized paths")
         if not isinstance(attrs, dict) or not isinstance(attrs.get("inputDrvs"), dict):
-            raise ValueError(f"derivation lacks inputDrvs: {drv}")
-        deps = set(attrs["inputDrvs"])
-        if not deps <= raw.keys():
+            raise ValueError(f"derivation lacks inputDrvs: {raw_drv}")
+        parents[drv] = set(map(normalize, attrs["inputDrvs"]))
+    for drv, deps in parents.items():
+        if not deps <= parents.keys():
             raise ValueError(f"incomplete recursive graph for {drv}")
-        parents[drv] = deps
     if not set(plan["checks"].values()) <= parents.keys():
         raise ValueError("Nix graph is missing declared check derivations")
 
@@ -95,6 +106,9 @@ def graph_summary(plan, raw):
         "commit": plan["commit"],
         "system": plan["system"],
         "graphDigest": planner.digest({drv: sorted(deps) for drv, deps in sorted(parents.items())}),
+        # This adjacency list is safe to cache and later use for automatic
+        # shared-frontier selection, without reevaluating all the derivations.
+        "derivationDependencies": {drv: sorted(deps) for drv, deps in sorted(parents.items())},
         "derivationCount": len(parents),
         "checkDependencies": deps,
         "checkWaves": tiers,
