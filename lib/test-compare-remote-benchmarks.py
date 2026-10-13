@@ -66,8 +66,7 @@ class CompareRemoteBenchmarksTest(unittest.TestCase):
                 self.write_variant(root, 2, 0, evidence())
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaisesRegex(ValueError, "invalid elapsed"):
-                self.write_variant(root, 2, 100, evidence()) if False else (
-                    compare.load_variant(4, self.variant_dir(root)))
+                compare.load_variant(4, self.variant_dir(root))
 
     @staticmethod
     def variant_dir(root):
