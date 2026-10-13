@@ -231,6 +231,39 @@ def prebuild_command(args):
     print(f"Prebuilt {len(results)} shared Nix targets at {commit}")
 
 
+def prebuild_local_command(args):
+    """Require every shared output to have reached this runner's local store.
+
+    A successful prebuild on a different runner does not prove the cache restored
+    here. Without this check the shard silently recompiles missing hotset
+    dependencies, defeating shared-build performance and hiding cache eviction.
+    """
+    plan = json.loads(Path(args.plan).read_text())
+    validate_plan(plan)
+    prebuild = json.loads(Path(args.prebuild).read_text())
+    if (prebuild.get("schemaVersion") != SCHEMA
+            or prebuild.get("commit") != plan["commit"]
+            or prebuild.get("digest") != plan["digest"]):
+        raise ValueError("prebuild evidence is stale or mismatched")
+    declared = prebuild.get("outputs", {})
+    if not isinstance(declared, dict) or set(declared) != set(plan["prebuildTargets"]):
+        raise ValueError("prebuild evidence is missing declared outputs")
+    outputs = []
+    for target in plan["prebuildTargets"]:
+        paths = declared[target]
+        if not isinstance(paths, list) or not paths or not all(
+                isinstance(path, str) and STORE.fullmatch(path) for path in paths):
+            raise ValueError(f"invalid prebuild outputs for {target}")
+        outputs.extend(paths)
+    if outputs:
+        # path-info does not build nor substitute; offline makes that guarantee
+        # explicit. One Nix query verifies the whole shared closure frontier.
+        actual = run_command(["nix", "path-info", "--offline", *sorted(set(outputs))]).splitlines()
+        if set(actual) != set(outputs):
+            raise ValueError("prebuilt outputs missing from shard Nix store")
+    print(f"PASS: {len(set(outputs))} shared outputs restored locally without recompilation")
+
+
 def verify_command(args):
     plan = json.loads(Path(args.plan).read_text())
     validate_plan(plan)
@@ -292,6 +325,10 @@ def main():
     p.add_argument("--plan", required=True)
     p.add_argument("--output", required=True)
     p.set_defaults(func=prebuild_command)
+    p = subs.add_parser("prebuild-local")
+    p.add_argument("--plan", required=True)
+    p.add_argument("--prebuild", required=True)
+    p.set_defaults(func=prebuild_local_command)
     p = subs.add_parser("verify")
     p.add_argument("--plan", required=True)
     p.add_argument("--directory", required=True)
