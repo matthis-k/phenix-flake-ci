@@ -48,6 +48,24 @@ class DagTests(unittest.TestCase):
         self.assertEqual(report["checkDependencies"]["a"], [])
         self.assertEqual(report, dag.graph_summary(plan, dict(reversed(list(mkgraph().items())))))
 
+    def test_modern_nix_v3_envelope_and_store_relative_nodes(self):
+        plan = mkplan()
+        modern = {
+            "version": 3,
+            "derivations": {
+                k.removeprefix("/nix/store/"): {
+                    "inputDrvs": {
+                        dep.removeprefix("/nix/store/"): outputs
+                        for dep, outputs in obj["inputDrvs"].items()
+                    }
+                }
+                for k, obj in mkgraph().items()
+            },
+        }
+        old = dag.graph_summary(plan, mkgraph())
+        new = dag.graph_summary(plan, modern)
+        self.assertEqual(old, new)
+
     def test_incomplete_and_cyclic_nix_graph_rejected(self):
         plan = mkplan()
         graph = mkgraph()
