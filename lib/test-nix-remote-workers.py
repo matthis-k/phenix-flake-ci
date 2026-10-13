@@ -59,8 +59,8 @@ class RemoteBuildersTest(unittest.TestCase):
             sshconf.assert_called_once()
             lines = machines.read_text().splitlines()
             self.assertEqual(lines, [
-                "ssh-ng://runner@100.64.0.1 x86_64-linux - 3 1 - -",
-                "ssh-ng://runner@100.64.0.2 x86_64-linux - 3 1 - -",
+                "ssh-ng://runner@100.64.0.1?remote-program=/nix/var/nix/profiles/default/bin/nix-daemon x86_64-linux - 3 1 - -",
+                "ssh-ng://runner@100.64.0.2?remote-program=/nix/var/nix/profiles/default/bin/nix-daemon x86_64-linux - 3 1 - -",
             ])
             self.assertEqual(len(json.loads(hosts.read_text())), 2)
 
