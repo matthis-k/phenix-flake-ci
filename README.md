@@ -432,6 +432,9 @@ case against the distributed DAG to determine if fan-out actually wins.
 
 ## Declarative execution backend
 
+For integration with established flake modules, evaluation tools and caches, see [Nix ecosystem integrations](docs/nix-ecosystem.md).
+
+
 The library can generate a pinned GitHub Actions caller from a Nix policy. The
 same consumer flake still owns its checks. Choose `matrix`, `nix-dag`, or
 `nix-remote`, then render the thin workflow with `mkFlakeCiWorkflow`. The
