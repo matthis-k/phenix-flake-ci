@@ -1,0 +1,191 @@
+# Reusable exact-head Nix check workflow; the caller owns all check definitions.
+name: Generic flake check matrix
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Path to the consumer's Nix check strategy configuration
+        type: string
+        required: true
+      library_ref:
+        description: Exact commit of the called phenix-flake-ci workflow
+        type: string
+        required: true
+      cache_prefix:
+        type: string
+        default: flake-checks
+      cache_inputs:
+        description: Extra lockfile glob for cache identity
+        type: string
+        default: flake.lock
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flake-matrix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Evaluate exact-head Nix inventory
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      digest: ${{ steps.plan.outputs.digest }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create full inventory and deterministic plan
+        id: plan
+        shell: bash
+        env:
+          CONFIG_FILE: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-plan
+          nix eval --json --file "$CONFIG_FILE" > ci-plan/config.json
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py plan \
+            --config ci-plan/config.json --output ci-plan/plan.json
+          python3 -m json.tool ci-plan/plan.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flake-check-plan
+          path: ci-plan/
+          if-no-files-found: error
+
+  prebuild:
+    name: Shared Nix build and cache writer
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flake-check-plan
+          path: ci-plan
+      - name: Restore and save shared Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-
+          gc-max-store-size-linux: "4G"
+      - name: Prebuild shared declared packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
+            --config ci-plan/config.json --output ci-plan/prebuild.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flake-prebuild-evidence
+          path: ci-plan/prebuild.json
+          if-no-files-found: error
+
+  shard:
+    name: Check ${{ matrix.id }}
+    needs: [plan, prebuild]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flake-check-plan
+          path: ci-plan
+      - name: Restore shared cache read-only
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-
+          save: false
+      - name: Execute full shard and record actual Nix outputs
+        shell: bash
+        env:
+          SHARD: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py build \
+            --plan ci-plan/plan.json --shard "$SHARD" --output ci-evidence/evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: flake-shard-${{ matrix.id }}
+          path: ci-evidence/evidence.json
+          if-no-files-found: error
+
+  result:
+    name: Flake matrix evidence aggregate
+    if: always()
+    needs: [plan, prebuild, shard]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flake-check-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flake-prebuild-evidence
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: flake-shard-*
+          path: ci-evidence
+      - name: Require successful complete exact-head evidence
+        shell: bash
+        env:
+          PLAN_STATUS: ${{ needs.plan.result }}
+          BUILD_STATUS: ${{ needs.prebuild.result }}
+          SHARD_STATUS: ${{ needs.shard.result }}
+        run: |
+          set -euo pipefail
+          test "$PLAN_STATUS" = success
+          test "$BUILD_STATUS" = success
+          test "$SHARD_STATUS" = success
+          python3 lib/flake-check-plan.py verify --plan ci-plan/plan.json --directory ci-evidence
