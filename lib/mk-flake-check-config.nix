@@ -8,7 +8,7 @@
   prebuildTargets ? [ ],
   cache ? {
     keyPrefix = "flake-checks";
-    saveOnDefaultBranch = true;
+    keyFiles = [ "flake.lock" ];
   },
 }:
 let
