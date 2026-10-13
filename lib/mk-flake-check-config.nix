@@ -32,6 +32,7 @@ assert valid;
   schemaVersion = 1;
   inherit system shardCount cache;
   strategy = strategy.id or "generic";
+  strategyOptions = builtins.removeAttrs strategy [ "id" "checkHints" "prebuildTargets" ];
   checkHints = (strategy.checkHints or { }) // checkHints;
   prebuildTargets = (strategy.prebuildTargets or [ ]) ++ prebuildTargets;
 }
