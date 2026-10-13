@@ -367,9 +367,9 @@ Cargo reverse-dependency impact continues to use the existing
 ```sh
 nix eval --json --file ci/check-config.nix > config.json
 python3 lib/flake-check-plan.py plan --config config.json --output plan.json
-python3 lib/flake-check-plan.py prebuild --config config.json --output prebuild.json
+python3 lib/flake-check-plan.py prebuild --plan plan.json --output prebuild.json
 python3 lib/flake-check-plan.py build --plan plan.json --shard shard-00 --output evidence.json
-python3 lib/flake-check-plan.py verify --plan plan.json --directory ci-evidence
+python3 lib/flake-check-plan.py verify --plan plan.json --prebuild prebuild.json --directory ci-evidence
 python3 lib/test-flake-check-plan.py -v
 ```
 
@@ -385,3 +385,9 @@ keys using runner platform and lockfiles, with Nix store paths as the reusable
 objects. Save from trusted revisions when publishing to a shared binary cache.
 This prototype still requires exact-head workflow, cold/warm cache, and
 shipping-evidence parity verification before replacing a required gate.
+
+The reusable workflow `.github/workflows/flake-checks.yml` centralizes all
+GitHub Actions jobs. Consumers call it using an immutable commit ref and pass
+the same commit in `library_ref`, plus the Nix config file path. The Nix
+`cache.keyFiles` policy supplies the cache key identity. This avoids a
+language-specific lockfile list in the reusable workflow.
