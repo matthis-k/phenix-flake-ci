@@ -55,6 +55,34 @@ class CompareRemoteBenchmarksTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mismatched checks"):
                 compare.report([a, b])
 
+    def test_actual_github_job_time_and_runner_minutes(self):
+        from datetime import datetime, timedelta, timezone
+
+        origin = datetime(2026, 10, 13, tzinfo=timezone.utc)
+        jobs = []
+        for count in (2, 4):
+            for index in range(count + 3):
+                start = origin + timedelta(minutes=index)
+                end = start + timedelta(minutes=2)
+                jobs.append({
+                    "name": f"{count} remote builders / job-{index}",
+                    "status": "completed", "conclusion": "success",
+                    "started_at": start.isoformat(),
+                    "completed_at": end.isoformat(),
+                })
+        metrics = compare.job_metrics(jobs, [2, 4])
+        self.assertEqual(metrics[2], (6, 10))
+        self.assertEqual(metrics[4], (8, 14))
+        with tempfile.TemporaryDirectory() as root:
+            variants = [self.write_variant(root, count, 100, evidence())
+                        for count in (2, 4)]
+            output = compare.report(variants, jobs=jobs)
+            self.assertIn("| 2 | 6.0 min | 10.0 min |", output)
+            self.assertIn("| 4 | 8.0 min | 14.0 min |", output)
+        jobs[-1]["conclusion"] = "failure"
+        with self.assertRaisesRegex(ValueError, "failed GitHub job"):
+            compare.job_metrics(jobs, [4])
+
     def test_missing_failed_and_invalid_timing_rejected(self):
         with tempfile.TemporaryDirectory() as root:
             broken = evidence()
