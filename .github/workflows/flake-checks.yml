@@ -182,5 +182,5 @@ jobs:
           test "$PLAN_STATUS" = success
           test "$BUILD_STATUS" = success
           test "$SHARD_STATUS" = success
-          python3 lib/flake-check-plan.py verify --plan ci-plan/plan.json \\
+          python3 lib/flake-check-plan.py verify --plan ci-plan/plan.json \
             --prebuild ci-plan/prebuild.json --directory ci-evidence
