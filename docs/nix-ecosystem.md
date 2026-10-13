@@ -73,13 +73,14 @@ For a consumer that already uses flake-parts:
       # workers defaults to 4; slotsPerWorker defaults to 2.
     };
     configPath = "ci/flake-check-config.nix";
-    libraryRef = "0123456789abcdef0123456789abcdef01234567";
+    libraryRef = inputs.phenix-flake-ci.rev;
   };
 }
 ```
 
-Replace the example SHA with the **tested, pinned commit**, and use the
-same commit for the library input and reusable workflow. Render
+Use the locked flake input's `rev` as the GitHub workflow pin. It is one
+source for the library code and the reusable workflow. For a local input
+without `rev`, use a tested immutable commit explicitly. Render
 `nix eval --raw .#lib.flakeCiWorkflow` to the tracked workflow file.
 This option is a plain flake attribute; the consumer does not need to
 replace its flake-parts modules.
