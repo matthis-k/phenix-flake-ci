@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -74,6 +75,32 @@ class RemoteBuildersTest(unittest.TestCase):
                  mock.patch.object(remote.time, "sleep"):
                 with self.assertRaises(RuntimeError):
                     remote.discover(args)
+            self.assertFalse(Path(args.machines).exists())
+
+
+    def test_discovery_exposes_ssh_ng_error_without_repeated_spam(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {"count": 1, "system": "x86_64-linux",
+                                     "slots": 2, "run_id": 22, "attempt": 1,
+                                     "timeout": 1,
+                                     "machines": str(Path(directory, "machines")),
+                                     "hosts": str(Path(directory, "hosts"))})()
+            status = {"Peer": {"1": {"HostName": remote.worker_name(22, 1, 1, 1),
+                                     "TailscaleIPs": ["100.64.0.1"]}}}
+
+            def fake_invoke(*command, **kwargs):
+                if command[:2] == ("tailscale", "status"):
+                    return type("Result", (), {"stdout": json.dumps(status)})()
+                raise subprocess.CalledProcessError(1, command, stderr="remote Nix store denied")
+
+            with mock.patch.object(remote, "invoke", side_effect=fake_invoke), \
+                 mock.patch.object(remote, "ssh_config"), \
+                 mock.patch.object(remote.time, "monotonic", side_effect=[0, 0, 2]), \
+                 mock.patch.object(remote.time, "sleep"), \
+                 redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(RuntimeError):
+                    remote.discover(args)
+            self.assertEqual(output.getvalue().count("remote Nix store denied"), 1)
             self.assertFalse(Path(args.machines).exists())
 
 
