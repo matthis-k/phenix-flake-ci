@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare completed, exact-head Nix remote-builder benchmarks."""
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 import sys
@@ -23,7 +24,38 @@ def load_variant(count, directory):
     return {"count": count, "wall": seconds, "evidence": evidence}
 
 
-def report(variants):
+
+def job_metrics(items, counts):
+    """Use completed GitHub Actions jobs for true wall and runner-minutes."""
+    values = {}
+    if not isinstance(items, list):
+        raise ValueError("invalid GitHub job listing")
+    for count in counts:
+        prefix = f"{count} remote builders / "
+        relevant = [item for item in items
+                    if isinstance(item, dict) and item.get("name", "").startswith(prefix)]
+        # Each reusable invocation has a plan, coordinator, acceptance and N workers.
+        if len(relevant) != count + 3:
+            raise ValueError(f"incomplete GitHub jobs for {count} builders")
+        durations = []
+        for item in relevant:
+            if item.get("status") != "completed" or item.get("conclusion") != "success":
+                raise ValueError(f"unfinished or failed GitHub job in pool {count}")
+            try:
+                start = datetime.fromisoformat(item["started_at"].replace("Z", "+00:00"))
+                end = datetime.fromisoformat(item["completed_at"].replace("Z", "+00:00"))
+            except (KeyError, AttributeError, TypeError, ValueError) as exc:
+                raise ValueError(f"invalid GitHub job timestamps for {count}") from exc
+            if end <= start:
+                raise ValueError(f"non-positive GitHub job duration for {count}")
+            durations.append((start, end))
+        wall = (max(end for _, end in durations) - min(start for start, _ in durations)).total_seconds()
+        runner = sum((end - start).total_seconds() for start, end in durations)
+        values[count] = (wall / 60, runner / 60)
+    return values
+
+
+def report(variants, jobs=None):
     if len(variants) < 2 or len({v["count"] for v in variants}) != len(variants):
         raise ValueError("provide at least two distinct worker counts")
     variants = sorted(variants, key=lambda v: v["count"])
@@ -48,6 +80,16 @@ def report(variants):
     for v in variants:
         output.append(f"| {v['count']} | {v['wall']:.1f} s | "
                       f"{baseline['wall'] / v['wall']:.2f}x |")
+    if jobs is not None:
+        metrics = job_metrics(jobs, [v["count"] for v in variants])
+        output += [
+            "",
+            "| Remote workers | Full GitHub stage wall time | GitHub runner-minutes |",
+            "| ---: | ---: | ---: |",
+        ]
+        for v in variants:
+            wall, runner = metrics[v["count"]]
+            output.append(f"| {v['count']} | {wall:.1f} min | {runner:.1f} min |")
     output += [
         "",
         "These times cover the Nix build command only. They exclude runner provisioning, "
@@ -61,6 +103,7 @@ def report(variants):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--variant", action="append", required=True, metavar="COUNT:DIR")
+    p.add_argument("--jobs-json", help="Completed GitHub Actions run jobs JSON")
     args = p.parse_args()
     try:
         variants = []
@@ -69,7 +112,13 @@ def main():
             if not sep or not count.isdigit() or int(count) < 1 or not directory:
                 raise ValueError(f"invalid variant: {item!r}")
             variants.append(load_variant(int(count), directory))
-        print(report(variants), end="")
+        jobs = None
+        if args.jobs_json:
+            payload = json.loads(Path(args.jobs_json).read_text())
+            if payload.get("total_count") != len(payload.get("jobs", [])):
+                raise ValueError("incomplete paginated GitHub job inventory")
+            jobs = payload["jobs"]
+        print(report(variants, jobs=jobs), end="")
     except (ValueError, KeyError, OSError, json.JSONDecodeError) as exc:
         print(f"remote-benchmark: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
