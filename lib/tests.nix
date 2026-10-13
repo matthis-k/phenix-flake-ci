@@ -262,6 +262,8 @@ in
     assert strategyConfig.schemaVersion == 1;
     assert strategyConfig.shardCount == 4;
     assert strategyConfig.strategy == "rust";
+    assert strategyConfig.strategyOptions.cargo.workspace == "rust";
+    assert strategyConfig.strategyOptions.cargo.cargoLock == "rust/Cargo.lock";
     assert strategyConfig.prebuildTargets == [ ".#kernel" ];
     assert strategyConfig.checkHints."m1-shipping".weight == 200;
     assert strategyConfig.checkHints."*shipping*".isolate;
