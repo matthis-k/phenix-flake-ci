@@ -90,9 +90,9 @@ jobs:
       - name: Restore and save shared Nix store
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-${{ github.sha }}
+          primary-key: ${{ inputs.cache_prefix }}-${{ runner.os }}-${{ hashFiles('flake.lock', inputs.cache_inputs) }}-${{ github.sha }}
           restore-prefixes-first-match: |
-            \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-
+            ${{ inputs.cache_prefix }}-${{ runner.os }}-${{ hashFiles('flake.lock', inputs.cache_inputs) }}-
           gc-max-store-size-linux: "4G"
       - name: Prebuild shared declared packages
         shell: bash
@@ -134,9 +134,9 @@ jobs:
       - name: Restore shared cache read-only
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-${{ github.sha }}
+          primary-key: ${{ inputs.cache_prefix }}-${{ runner.os }}-${{ hashFiles('flake.lock', inputs.cache_inputs) }}-${{ github.sha }}
           restore-prefixes-first-match: |
-            \${{ inputs.cache_prefix }}-\${{ runner.os }}-\${{ hashFiles('flake.lock', inputs.cache_inputs) }}-
+            ${{ inputs.cache_prefix }}-${{ runner.os }}-${{ hashFiles('flake.lock', inputs.cache_inputs) }}-
           save: false
       - name: Execute full shard and record actual Nix outputs
         shell: bash
