@@ -92,7 +92,7 @@ ephemeral authentication key instead, set `credentials = "authkey"` and
 provide only `TS_AUTHKEY`. The generator forwards only the selected secret
 set. Never put secret values into Nix expressions or committed workflows.
 
-The remote configuration supports 1-16 workers and 1-64 slots per worker.
+The remote configuration supports 1-16 workers and 1-32 slots per worker.
 It selects the existing Tailscale workflow without changing its timeout,
 SSH-store checks, release handling or final acceptance job.
 
@@ -111,6 +111,10 @@ events = {
 The remote backend always rejects `pullRequest = true`. At least one event
 must remain enabled. Branch name and config path inputs are restricted to
 simple repository-relative strings.
+
+## Existing Nix tools
+
+See [Nix ecosystem integrations](nix-ecosystem.md) for flake-parts, treefmt-nix, git-hooks.nix, nix-github-actions, nix-fast-build, workflow generators, and binary caches. Phenix CI composes their flake outputs rather than replacing those libraries.
 
 ## Verification and limits
 
