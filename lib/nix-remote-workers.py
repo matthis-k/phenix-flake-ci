@@ -18,6 +18,7 @@ COMPLETION = "/tmp/phenix-flake-ci-finished"
 # GitHub's non-interactive SSH shells do not source /etc/profile.d/nix.sh.
 # Use the absolute executable installed by cachix/install-nix-action.
 REMOTE_DAEMON = "/nix/var/nix/profiles/default/bin/nix-daemon"
+LOCAL_NIX = "/nix/var/nix/profiles/default/bin/nix"
 
 
 def store_uri(ip):
@@ -110,7 +111,7 @@ def discover(args):
                 continue
             try:
                 # Prove the ssh-ng store protocol works before accepting a worker.
-                invoke("sudo", "nix", "store", "ping", "--store",
+                invoke("sudo", LOCAL_NIX, "store", "ping", "--store",
                        store_uri(ip), timeout=12)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 if isinstance(exc, subprocess.TimeoutExpired):
