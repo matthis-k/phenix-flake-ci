@@ -32,7 +32,7 @@ def save(path, payload):
 
 def graph_summary(plan, raw):
     """Check-level dependency closure through intermediate Nix derivations."""
-    # Nix 2.3x emits protocol v3 as {"version": 3,
+    # Nix >=2.33 emits protocol v4 as {"version": 4,
     # "derivations": { "<store-hash-name>": {...} }}. Earlier versions
     # emitted the path map directly. Both contain inputDrvs.
     if isinstance(raw, dict) and "derivations" in raw:
@@ -56,10 +56,18 @@ def graph_summary(plan, raw):
         drv = normalize(raw_drv)
         if drv in parents:
             raise ValueError("derivation graph has duplicate normalized paths")
-        if not isinstance(attrs, dict) or not isinstance(attrs.get("inputDrvs"), dict):
-            fields = sorted(attrs) if isinstance(attrs, dict) else type(attrs).__name__
-            raise ValueError(f"derivation lacks inputDrvs: {raw_drv}; fields={fields}")
-        parents[drv] = set(map(normalize, attrs["inputDrvs"]))
+        if not isinstance(attrs, dict):
+            raise ValueError(f"invalid derivation record: {raw_drv}")
+        # Nix >= 2.33 uses JSON protocol v4, with inputs.drvs and a
+        # top-level versioned derivations map. Older versions use inputDrvs.
+        if "inputs" in attrs:
+            inputs = attrs["inputs"]
+            dependencies = inputs.get("drvs") if isinstance(inputs, dict) else None
+        else:
+            dependencies = attrs.get("inputDrvs")
+        if not isinstance(dependencies, dict):
+            raise ValueError(f"derivation lacks valid input dependencies: {raw_drv}")
+        parents[drv] = set(map(normalize, dependencies))
     for drv, deps in parents.items():
         if not deps <= parents.keys():
             raise ValueError(f"incomplete recursive graph for {drv}")
