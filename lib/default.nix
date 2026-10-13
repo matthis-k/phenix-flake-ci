@@ -1,6 +1,8 @@
 let
   ciSchemaVersion = 3;
   mkCi = import ./mk-ci.nix;
+  mkFlakeCheckConfig = import ./mk-flake-check-config.nix;
+  rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
   normalizeGitHooks = import ./normalize-git-hooks.nix;
@@ -102,6 +104,8 @@ in
     ciSchemaVersion
     maintenanceCommandGraph
     mkCi
+    mkFlakeCheckConfig
+    rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs
     mkMaintenancePackage
