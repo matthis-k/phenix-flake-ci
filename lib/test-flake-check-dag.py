@@ -66,6 +66,27 @@ class DagTests(unittest.TestCase):
         new = dag.graph_summary(plan, modern)
         self.assertEqual(old, new)
 
+    def test_nix_233_v4_nested_inputs_and_envelope(self):
+        plan = mkplan()
+        modern = {
+            "version": 4,
+            "derivations": {
+                k.removeprefix("/nix/store/"): {
+                    "version": 4,
+                    "inputs": {
+                        "drvs": {
+                            dep.removeprefix("/nix/store/"): outputs
+                            for dep, outputs in obj["inputDrvs"].items()
+                        },
+                        "srcs": [],
+                    },
+                }
+                for k, obj in mkgraph().items()
+            },
+        }
+        self.assertEqual(dag.graph_summary(plan, mkgraph()),
+                         dag.graph_summary(plan, modern))
+
     def test_incomplete_and_cyclic_nix_graph_rejected(self):
         plan = mkplan()
         graph = mkgraph()
