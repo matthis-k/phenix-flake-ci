@@ -5,6 +5,7 @@ import os
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
@@ -121,6 +122,28 @@ class TestFlakeChecks(unittest.TestCase):
             planner.write_json(root / "prebuild.json", pre)
             with self.assertRaisesRegex(ValueError, "missing"):
                 planner.verify_command(args)
+
+
+    def test_prebuild_uses_one_concurrent_nix_invocation(self):
+        config = {**CONFIG, "prebuildTargets": [".#kernel", ".#shared-plugin"]}
+        plan = planner.make_plan(checks("a"), config, SHA)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            planner.write_json(root / "plan.json", plan)
+            args = type("Args", (), {"plan": root / "plan.json", "output": root / "prebuild.json"})
+            def fake_command(argv):
+                if argv[0] == "git":
+                    return SHA
+                return "/nix/store/" + "c" * 32 + "-example-output"
+            with mock.patch.object(planner.subprocess, "run") as build, mock.patch.object(
+                    planner, "run_command", side_effect=fake_command) as command:
+                planner.prebuild_command(args)
+            build.assert_called_once_with(
+                ["nix", "build", "--no-link", "-L", ".#kernel", ".#shared-plugin"],
+                check=True)
+            self.assertEqual(command.call_count, 3)
+            evidence = json.loads((root / "prebuild.json").read_text())
+            self.assertEqual(set(evidence["outputs"]), set(config["prebuildTargets"]))
 
     def test_skipped_and_forged_passes_fail(self):
         plan = planner.make_plan(checks("a"), CONFIG, SHA)
