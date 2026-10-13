@@ -73,7 +73,8 @@ def cache_prefix(config):
         if candidate.is_absolute() or ".." in candidate.parts or not candidate.is_file():
             raise ValueError(f"invalid or absent cache key input: {filename}")
         identities.append([filename, hashlib.sha256(candidate.read_bytes()).hexdigest()])
-    identity = digest({"keyFiles": sorted(identities), "strategy": config.get("strategy", "generic")})
+    identity = digest({"keyFiles": sorted(identities), "strategy": config.get("strategy", "generic"),
+                       "options": config.get("strategyOptions", {})})
     return f"{prefix}-{config['system']}-{identity[:20]}"
 
 
