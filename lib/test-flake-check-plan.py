@@ -145,6 +145,31 @@ class TestFlakeChecks(unittest.TestCase):
             evidence = json.loads((root / "prebuild.json").read_text())
             self.assertEqual(set(evidence["outputs"]), set(config["prebuildTargets"]))
 
+    def test_prebuild_must_be_locally_restored_not_rebuilt_by_shard(self):
+        cfg = {**CONFIG, "prebuildTargets": [".#shared"]}
+        plan = planner.make_plan(checks("a"), cfg, SHA)
+        output = "/nix/store/" + "d" * 32 + "-shared"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            planner.write_json(root / "plan.json", plan)
+            planner.write_json(root / "prebuild.json", {
+                "schemaVersion": 1, "digest": plan["digest"], "commit": SHA,
+                "outputs": {".#shared": [output]},
+            })
+            args = type("Args", (), {
+                "plan": root / "plan.json", "prebuild": root / "prebuild.json"})
+            with mock.patch.object(planner, "run_command", return_value=output) as cmd:
+                planner.prebuild_local_command(args)
+            cmd.assert_called_once_with(["nix", "path-info", "--offline", output])
+            with mock.patch.object(planner, "run_command", return_value=""):
+                with self.assertRaisesRegex(ValueError, "missing from shard"):
+                    planner.prebuild_local_command(args)
+            evidence = json.loads((root / "prebuild.json").read_text())
+            evidence["digest"] = "forged"
+            planner.write_json(root / "prebuild.json", evidence)
+            with self.assertRaisesRegex(ValueError, "stale or mismatched"):
+                planner.prebuild_local_command(args)
+
     def test_skipped_and_forged_passes_fail(self):
         plan = planner.make_plan(checks("a"), CONFIG, SHA)
         with tempfile.TemporaryDirectory() as tmp:
