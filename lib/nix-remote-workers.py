@@ -85,12 +85,17 @@ def discover(args):
              for i in range(1, count + 1)]
     end = time.monotonic() + positive(args.timeout, 1, 900)
     ready = {}
+    discovered = {}
     while time.monotonic() < end and len(ready) < count:
         status = json.loads(invoke("tailscale", "status", "--json").stdout)
         present = peers(status)
         candidates = {name: present[name] for name in names if name in present}
-        if candidates:
-            ssh_config(list(candidates.values()))
+        discovered.update(candidates)
+        if discovered:
+            # Persist partial discovery so cleanup can release workers even
+            # when one missing or misconfigured peer prevents acceptance.
+            Path(args.hosts).write_text(json.dumps(discovered, sort_keys=True) + "\n")
+            ssh_config(list(discovered.values()))
         for name, ip in candidates.items():
             if name in ready:
                 continue
