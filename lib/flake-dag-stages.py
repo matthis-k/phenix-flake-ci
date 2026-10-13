@@ -94,20 +94,22 @@ def ensure_commit(plan):
         raise ValueError("worker checkout does not match exact-head DAG")
 
 def build_selected(plan, names):
-    results = {}
-    for name in names:
-        if name not in plan["checks"]:
-            raise ValueError(f"undeclared check {name}")
-        # Let each Nix invocation schedule its entire derivation closure.
-        target = f".#checks.{plan['system']}.{name}"
-        outputs = planner.run_command(
-            ["nix", "build", "--no-link", "--print-out-paths", "-L", target]).splitlines()
-        if not outputs or not all(planner.STORE.fullmatch(v) for v in outputs):
-            raise ValueError(f"invalid store outputs for {name}")
-        results[name] = {
-            "drv": plan["checks"][name], "status": "pass", "outputs": outputs
-        }
-    return results
+    if not names:
+        return {}
+    if len(names) != len(set(names)) or not set(names) <= set(plan["checks"]):
+        raise ValueError("duplicate or undeclared selected check")
+    subset = {name: plan["checks"][name] for name in sorted(names)}
+    targets = [f".#checks.{plan['system']}.{name}" for name in sorted(names)]
+    # One Nix invocation for every ready root in this worker: Nix schedules
+    # the entire dependency DAG concurrently and builds identical .drv paths
+    # only once, rather than serializing one nix build per named check.
+    raw = subprocess.check_output(
+        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True)
+    realized = dag.parse_nix_results(json.loads(raw), subset)
+    return {
+        name: {"drv": drv, "status": "pass", "outputs": realized[drv]}
+        for name, drv in subset.items()
+    }
 
 def evidence(plan, stages, role, checks):
     return {
