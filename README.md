@@ -355,12 +355,15 @@ ci.mkFlakeCheckConfig {
     prebuildTargets = [ ".#kernel" ".#test-runner" ];
   };
   checkHints."release-shipping" = { isolate = true; weight = 200; };
+  checkHints."b2-*" = { affinity = "state"; weight = 3; };
 }
 ```
 
 Other languages can provide the same strategy attributes without changes to
-the generic planner. `checkHints` changes scheduling only. Any new check
-still enters the evaluated inventory. The Rust helper is deliberately small:
+the generic planner. `checkHints` changes scheduling only: `weight` estimates cost, `isolate`
+reserves a worker, and `affinity` keeps checks with shared build inputs on
+one shard. An isolated check cannot also have affinity. No hint defines or
+skips a check; new checks still enter the evaluated inventory. The Rust helper is deliberately small:
 Cargo reverse-dependency impact continues to use the existing
 `cargo-impact.py` with its fail-full fallback.
 
@@ -368,6 +371,7 @@ Cargo reverse-dependency impact continues to use the existing
 nix eval --json --file ci/check-config.nix > config.json
 python3 lib/flake-check-plan.py plan --config config.json --output plan.json
 python3 lib/flake-check-plan.py prebuild --plan plan.json --output prebuild.json
+python3 lib/flake-check-plan.py prebuild-local --plan plan.json --prebuild prebuild.json
 python3 lib/flake-check-plan.py build --plan plan.json --shard shard-00 --output evidence.json
 python3 lib/flake-check-plan.py verify --plan plan.json --prebuild prebuild.json --directory ci-evidence
 python3 lib/test-flake-check-plan.py -v
@@ -379,8 +383,11 @@ missing, duplicate, failed, stale, or forged check results. A failed worker
 does not count as success because a cache restored a build. The workflow must
 upload one `evidence.json` per shard, including on failure.
 
-Cache policy is an execution concern: prebuild a small set of Nix packages in
-one writer job, then restore its cache read-only in shard jobs. Configure cache
+Cache policy is an execution concern: build all selected prebuild targets in
+one concurrent Nix invocation on the writer, then restore its cache
+read-only in shard jobs. The shard fails before compiling if its local store
+is missing any declared shared output; cache misses must not silently
+rebuild expensive hotset packages. Configure cache
 keys using runner platform and lockfiles, with Nix store paths as the reusable
 objects. Save from trusted revisions when publishing to a shared binary cache.
 This prototype still requires exact-head workflow, cold/warm cache, and
