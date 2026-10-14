@@ -7,6 +7,8 @@ on:
       library_ref: { type: string, required: true }
       worker_count: { type: number, default: 4 }
       slots_per_worker: { type: number, default: 2 }
+      cache_namespace: { type: string, default: "" }
+      artifact_namespace: { type: string, default: "" }
     secrets:
       TS_OAUTH_CLIENT_ID: { required: false }
       TS_AUDIENCE: { required: false }
@@ -74,7 +76,7 @@ jobs:
           echo "cache_prefix=$(jq -er .cachePrefix ci-plan/plan.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: remote-nix-plan-${{ inputs.worker_count }}
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-plan/
           if-no-files-found: error
 
@@ -145,7 +147,7 @@ jobs:
             trusted-users = root runner
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: remote-nix-plan-${{ inputs.worker_count }}
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-plan/
       # The coordinator owns the complete realized closure; workers stay
       # ephemeral with no independent cache writers. Only trusted push or
@@ -153,9 +155,9 @@ jobs:
       - name: Restore and save trusted remote Nix store
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
           restore-prefixes-first-match: |
-            remote-${{ needs.plan.outputs.cache_prefix }}-
+            remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
           gc-max-store-size-linux: "4G"
       - name: Name coordinator uniquely for this invocation
         id: node
@@ -198,7 +200,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: remote-nix-evidence-${{ inputs.worker_count }}
+          name: remote-nix-evidence-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-result/
           if-no-files-found: warn
 
@@ -225,11 +227,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: remote-nix-plan-${{ inputs.worker_count }}
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-plan/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: remote-nix-evidence-${{ inputs.worker_count }}
+          name: remote-nix-evidence-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-result/
       - name: Independently verify all check outputs and commit identity
         run: |
