@@ -1,0 +1,240 @@
+# Experimental opt-in Nix remote builders. Tailnet OIDC policy must be configured first.
+name: Distributed Nix remote builders
+on:
+  workflow_call:
+    inputs:
+      config: { type: string, required: true }
+      library_ref: { type: string, required: true }
+      worker_count: { type: number, default: 4 }
+      slots_per_worker: { type: number, default: 2 }
+      cache_namespace: { type: string, default: "" }
+      artifact_namespace: { type: string, default: "" }
+    secrets:
+      TS_OAUTH_CLIENT_ID: { required: false }
+      TS_AUDIENCE: { required: false }
+      TS_AUTHKEY: { required: false }
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    name: Verify authentication and evaluate exact-head Nix DAG
+    runs-on: ubuntu-24.04
+    outputs:
+      workers: ${{ steps.pool.outputs.workers }}
+      cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+    steps:
+      - name: Require configured Tailscale federated identity
+        env:
+          CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+          AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$AUTHKEY" ]]; then
+            if [[ -n "$CLIENT_ID" || -n "$AUDIENCE" ]]; then
+              echo "::error::Provide either TS_AUTHKEY or the complete OIDC pair, not both."
+              exit 1
+            fi
+          elif [[ -z "$CLIENT_ID" || -z "$AUDIENCE" ]]; then
+            echo "::error::Provide an ephemeral tagged TS_AUTHKEY, or TS_OAUTH_CLIENT_ID and TS_AUDIENCE, with tag:phenix-ci SSH grants."
+            exit 1
+          fi
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate worker matrix
+        id: pool
+        env:
+          WORKERS: ${{ inputs.worker_count }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/nix-remote-workers.py matrix --count "$WORKERS" >> "$GITHUB_OUTPUT"
+      - name: Evaluate all consumer Nix checks and derive full DAG
+        id: plan
+        env:
+          CONFIG_FILE: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-plan
+          nix eval --json --file "$CONFIG_FILE" > ci-plan/config.json
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py plan \
+            --config ci-plan/config.json --output ci-plan/plan.json
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
+            --plan ci-plan/plan.json --output ci-plan/graph.json
+          echo "cache_prefix=$(jq -er .cachePrefix ci-plan/plan.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-plan/
+          if-no-files-found: error
+
+  worker:
+    name: Nix builder ${{ matrix.index }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        index: ${{ fromJSON(needs.plan.outputs.workers) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            trusted-users = root runner
+      - name: Assign unique ephemeral host identity
+        id: node
+        env:
+          COUNT: ${{ inputs.worker_count }}
+          INDEX: ${{ matrix.index }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/nix-remote-workers.py hostname \
+            --run-id "$RUN_ID" --attempt "$ATTEMPT" \
+            --count "$COUNT" --index "$INDEX" >> "$GITHUB_OUTPUT"
+      - name: Connect worker and enable Tailscale SSH
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:phenix-ci
+          hostname: ${{ steps.node.outputs.hostname }}
+          args: --ssh
+      - name: Serve derivations until coordinator signals completion
+        run: python3 .ci-tools/flake-ci/lib/nix-remote-workers.py hold --timeout 1800
+
+  coordinator:
+    name: Nix DAG scheduler / ${{ inputs.worker_count }} builders
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            trusted-users = root runner
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-plan/
+      # The coordinator owns the complete realized closure; workers stay
+      # ephemeral with no independent cache writers. Only trusted push or
+      # manual workflows may invoke this backend with Tailscale credentials.
+      - name: Restore and save trusted remote Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
+          restore-prefixes-first-match: |
+            remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
+          gc-max-store-size-linux: "4G"
+      - name: Name coordinator uniquely for this invocation
+        id: node
+        run: echo "hostname=fc-${{ github.run_id }}-${{ github.run_attempt }}-n${{ inputs.worker_count }}-ctl" >> "$GITHUB_OUTPUT"
+      - name: Join same tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:phenix-ci
+          hostname: ${{ steps.node.outputs.hostname }}
+      - name: Discover authenticated ssh-ng workers
+        env:
+          COUNT: ${{ inputs.worker_count }}
+          SLOTS: ${{ inputs.slots_per_worker }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/nix-remote-workers.py discover \
+            --run-id "$RUN_ID" --attempt "$ATTEMPT" \
+            --count "$COUNT" --slots "$SLOTS" --timeout 300 \
+            --machines ci-plan/machines --hosts ci-plan/hosts.json
+      - name: Native Nix scheduler executes all exact-head checks
+        run: |
+          python3 .ci-tools/flake-ci/lib/nix-remote-workers.py build \
+            --machines ci-plan/machines --dag .ci-tools/flake-ci/lib/flake-check-dag.py \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --evidence ci-result/evidence.json --timing ci-result/timing.json
+      - name: Verify complete DAG shipping evidence
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --evidence ci-result/evidence.json
+      - name: Release ephemeral workers
+        if: always()
+        run: |
+          python3 .ci-tools/flake-ci/lib/nix-remote-workers.py stop \
+            --hosts ci-plan/hosts.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: remote-nix-evidence-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-result/
+          if-no-files-found: warn
+
+  acceptance:
+    name: Require all builders and exact-head shipping evidence
+    needs: [plan, worker, coordinator]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every matrix worker and full coordinator success
+        env:
+          PLAN: ${{ needs.plan.result }}
+          WORKERS: ${{ needs.worker.result }}
+          COORDINATOR: ${{ needs.coordinator.result }}
+        run: |
+          test "$PLAN" = success
+          test "$WORKERS" = success
+          test "$COORDINATOR" = success
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-plan/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: remote-nix-evidence-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-result/
+      - name: Independently verify all check outputs and commit identity
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --evidence ci-result/evidence.json

@@ -263,6 +263,17 @@ When `ci.github.enable = true`, the workflow is generated from the maintenance g
 
 Consumers should commit the generated workflow and keep it synchronized with the Nix declaration.
 
+## Flake-aware Nix checks roadmap
+
+[Flake-aware CI roadmap](docs/flake-aware-ci-roadmap.md) describes the proposed
+opt-in Nix check planner, verified check inventory, shared-output scheduling
+and evidence-based CI gate. It builds on `mkCi` and the existing Cargo impact
+planner. These features are planned, not implemented.
+
+The consumer flake remains responsible for check derivations, Rust compilation
+reuse, and optimized release evidence. The CI library owns scheduling,
+selection proofs, cache policy and generated GitHub workflows.
+
 ## Dependency-derived PR check selection (experimental)
 
 Enable `ci.github.prImpact = { enable = true; workspace = "rust"; };` to
@@ -323,3 +334,112 @@ declaration list; every changed target must have a changed workspace crate
 manifest. Any additional diff or parsing ambiguity restores the full-CI
 fallback. The normal Source check still verifies generated workflow
 synchronization.
+
+## Exact-head Nix check shards (experimental)
+
+The opt-in flake check planner discovers the consumer's evaluated
+`checks.<system>` attribute set at the checked-out commit. There is no
+second list of required checks in the workflow.
+
+A consumer injects a toolchain strategy through a Nix parameter:
+
+```nix
+let
+  ci = import ./vendor/phenix-flake-ci/lib/default.nix;
+in
+ci.mkFlakeCheckConfig {
+  system = "x86_64-linux";
+  shardCount = 4;
+  strategy = ci.rustCheckStrategy {
+    workspace = "rust";
+    prebuildTargets = [ ".#kernel" ".#test-runner" ];
+  };
+  checkHints."release-shipping" = { isolate = true; weight = 200; };
+  checkHints."b2-*" = { affinity = "state"; weight = 3; };
+}
+```
+
+Other languages can provide the same strategy attributes without changes to
+the generic planner. `checkHints` changes scheduling only: `weight` estimates cost, `isolate`
+reserves a worker, and `affinity` keeps checks with shared build inputs on
+one shard. An isolated check cannot also have affinity. No hint defines or
+skips a check; new checks still enter the evaluated inventory. The Rust helper is deliberately small:
+Cargo reverse-dependency impact continues to use the existing
+`cargo-impact.py` with its fail-full fallback.
+
+```sh
+nix eval --json --file ci/check-config.nix > config.json
+python3 lib/flake-check-plan.py plan --config config.json --output plan.json
+python3 lib/flake-check-plan.py prebuild --plan plan.json --output prebuild.json
+python3 lib/flake-check-plan.py prebuild-local --plan plan.json --prebuild prebuild.json
+python3 lib/flake-check-plan.py build --plan plan.json --shard shard-00 --output evidence.json
+python3 lib/flake-check-plan.py verify --plan plan.json --prebuild prebuild.json --directory ci-evidence
+python3 lib/test-flake-check-plan.py -v
+```
+
+`plan` emits a versioned SHA-256 manifest and GitHub matrix output. Each
+worker builds actual Nix checks and writes evidence; the final verifier rejects
+missing, duplicate, failed, stale, or forged check results. A failed worker
+does not count as success because a cache restored a build. The workflow must
+upload one `evidence.json` per shard, including on failure.
+
+Cache policy is an execution concern: build all selected prebuild targets in
+one concurrent Nix invocation on the writer, then restore its cache
+read-only in shard jobs. The shard fails before compiling if its local store
+is missing any declared shared output; cache misses must not silently
+rebuild expensive hotset packages. Configure cache
+keys using runner platform and lockfiles, with Nix store paths as the reusable
+objects. Save from trusted revisions when publishing to a shared binary cache.
+This prototype still requires exact-head workflow, cold/warm cache, and
+shipping-evidence parity verification before replacing a required gate.
+
+The reusable workflow `.github/workflows/flake-checks.yml` centralizes all
+GitHub Actions jobs. Consumers call it using an immutable commit ref and pass
+the same commit in `library_ref`, plus the Nix config file path. The Nix
+`cache.keyFiles` policy supplies the cache key identity. This avoids a
+language-specific lockfile list in the reusable workflow.
+
+## Generated exact-head Nix DAG (experimental)
+
+The optional `flake-dag-staged.yml` reusable workflow is a candidate
+alternative to the fixed Nix shard matrix. It does **not** replace the
+existing required shipping gate.
+
+1. Discover all `checks.<system>` directly from the consumer flake.
+2. Read the recursive Nix derivation DAG and `inputDrvs`; cache the
+   normalized adjacency/check dependency graph under the exact commit and
+   complete check-plan digest. A changed derivation invalidates the DAG cache.
+3. Build the declared shared hotset once into a read-only base Nix cache.
+4. Automatically fan out checks with no dependencies on other named checks.
+   Each ready shard builds its real Nix derivations and exports the incremental
+   Nix store closure, excluding the shared cache's already-realized closure.
+5. The join job restores the shared cache, imports leaf output archives,
+   verifies that completed leaf outputs exist in its local Nix store, then
+   builds dependent checks (including shipping) and emits full evidence.
+
+This is bounded, dynamic GitHub Actions fan-out with a static final join.
+Arbitrary per-node `needs` edges cannot be created from outputs in the
+same GitHub run. Nix schedules real derivation dependencies inside each job;
+the CI code only chooses groups and transfers completed outputs. The
+`nix-store --export`/`--import` closure handoff is lossless but may be
+expensive; evaluate archive sizes, cache transfer, duplicated derivations,
+cold and warm critical paths, and full shipping evidence before adoption.
+
+Alternatively, `flake-check-dag.py build` executes the complete check DAG
+within one Nix invocation on one runner, sharing every exact derivation
+locally and avoiding all inter-runner output transfer. Compare this reference
+case against the distributed DAG to determine if fan-out actually wins.
+
+## Declarative execution backend
+
+For integration with established flake modules, evaluation tools and caches, see [Nix ecosystem integrations](docs/nix-ecosystem.md).
+
+
+The library can generate a pinned GitHub Actions caller from a Nix policy. The
+same consumer flake still owns its checks. Choose `matrix`, `nix-dag`, or
+`nix-remote`, then render the thin workflow with `mkFlakeCiWorkflow`. The
+remote backend is restricted to trusted push/manual triggers. It never enables
+remote execution for untrusted pull requests.
+
+See [backend configuration](docs/ci-backends.md) for a complete example,
+credential policy, local execution and verification.
