@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       workers: ${{ steps.pool.outputs.workers }}
+      cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
     steps:
       - name: Require configured Tailscale federated identity
         env:
@@ -59,6 +60,7 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/nix-remote-workers.py matrix --count "$WORKERS" >> "$GITHUB_OUTPUT"
       - name: Evaluate all consumer Nix checks and derive full DAG
+        id: plan
         env:
           CONFIG_FILE: ${{ inputs.config }}
         run: |
@@ -69,6 +71,7 @@ jobs:
             --config ci-plan/config.json --output ci-plan/plan.json
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
             --plan ci-plan/plan.json --output ci-plan/graph.json
+          echo "cache_prefix=$(jq -er .cachePrefix ci-plan/plan.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}
@@ -144,6 +147,16 @@ jobs:
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}
           path: ci-plan/
+      # The coordinator owns the complete realized closure; workers stay
+      # ephemeral with no independent cache writers. Only trusted push or
+      # manual workflows may invoke this backend with Tailscale credentials.
+      - name: Restore and save trusted remote Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            remote-${{ needs.plan.outputs.cache_prefix }}-
+          gc-max-store-size-linux: "4G"
       - name: Name coordinator uniquely for this invocation
         id: node
         run: echo "hostname=fc-${{ github.run_id }}-${{ github.run_attempt }}-n${{ inputs.worker_count }}-ctl" >> "$GITHUB_OUTPUT"
