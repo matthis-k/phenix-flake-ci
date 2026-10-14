@@ -120,5 +120,30 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertNotIn("name: remote-nix-evidence\n", workflow)
 
 
+    def test_remote_coordinator_has_trusted_cross_run_nix_cache(self):
+        """A second full run should actually reuse Nix output paths.
+
+        A fresh GitHub runner has a cold Nix store by default. Re-running
+        without restoring a cache is not a warm benchmark.
+        """
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  worker:\n", 1)[0]
+        worker = workflow.split("  worker:\n", 1)[1].split("  coordinator:\n", 1)[0]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        self.assertIn("cache_prefix: ${{ steps.plan.outputs.cache_prefix }}", plan)
+        self.assertIn("cache_prefix=", plan)
+        self.assertIn("cachePrefix", plan)
+        self.assertIn("nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569", coordinator)
+        self.assertIn("primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}", coordinator)
+        self.assertIn("restore-prefixes-first-match:", coordinator)
+        self.assertIn("remote-${{ needs.plan.outputs.cache_prefix }}-", coordinator)
+        self.assertIn('gc-max-store-size-linux: "4G"', coordinator)
+        self.assertLess(coordinator.index("Restore and save trusted remote Nix store"),
+                        coordinator.index("Native Nix scheduler executes all exact-head checks"))
+        self.assertNotIn("cache-nix-action", worker)
+        self.assertIn("name: Require all builders and exact-head shipping evidence", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()
