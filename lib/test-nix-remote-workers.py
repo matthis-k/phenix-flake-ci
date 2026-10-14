@@ -154,7 +154,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("cache_prefix=", plan)
         self.assertIn("cachePrefix", plan)
         self.assertIn("nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569", coordinator)
-        self.assertIn("primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}", coordinator)
+        self.assertIn("primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}", coordinator)
         self.assertIn("restore-prefixes-first-match:", coordinator)
         self.assertIn("remote-${{ needs.plan.outputs.cache_prefix }}-", coordinator)
         self.assertIn('gc-max-store-size-linux: "4G"', coordinator)
