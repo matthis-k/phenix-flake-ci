@@ -120,6 +120,25 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertNotIn("name: remote-nix-evidence\n", workflow)
 
 
+    def test_same_run_cold_warm_namespace_isolated_without_altering_default_cache(self):
+        # Reusable cold and warm jobs share github.run_id and github.sha.
+        # A unique run namespace must isolate the cold trial from existing
+        # caches, while phase suffixes prevent artifact-v4 collisions.
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        self.assertIn('cache_namespace: { type: string, default: "" }', workflow)
+        self.assertIn('artifact_namespace: { type: string, default: "" }', workflow)
+        self.assertIn("inputs.cache_namespace", workflow)
+        self.assertIn("inputs.artifact_namespace", workflow)
+        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 3)
+        self.assertEqual(workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}${{"), 2)
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        self.assertIn("restore-prefixes-first-match:", coordinator)
+        # The namespace appears in both the primary and restore prefix.
+        self.assertGreaterEqual(coordinator.count("inputs.cache_namespace"), 2)
+        self.assertIn("github.sha", coordinator)
+        self.assertIn("gc-max-store-size-linux: \"4G\"", coordinator)
+
     def test_remote_coordinator_has_trusted_cross_run_nix_cache(self):
         """A second full run should actually reuse Nix output paths.
 
