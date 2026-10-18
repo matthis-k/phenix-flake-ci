@@ -98,6 +98,13 @@ published closure, it must include them through authoritative Nix checks.
 Test the configured destination and substitution on real workers before
 claiming cross-run or cross-machine cache savings.
 
+
+To exercise publication without an external cache service, use a writable
+`file:///absolute/path` Nix store as the destination and run the same
+`publish` subcommand against freshly verified plan, graph, and evidence
+files. This tests the output selection and Nix-store transport independently
+of S3/SSH credentials. It does not establish remote substitution performance.
+
 ## Benchmark
 
 Run 2, 4 and 8 workers sequentially on the same immutable consumer commit
