@@ -206,14 +206,43 @@ def build_command(args):
                 "commit": plan["commit"], "system": plan["system"],
                 "shard": args.shard, "status": "failed", "checks": {}}
     try:
+        # One Nix invocation exposes the complete shard dependency DAG to the
+        # native scheduler. Invoking Nix once per check needlessly serialized
+        # otherwise independent builds and multiplied evaluation overhead.
+        # --json reports realized outputs bound to exact evaluated drv paths;
+        # reuse the same strict parser as the full-DAG backend.
+        targets = [f".#checks.{plan['system']}.{name}" for name in shard["checks"]]
+        raw = subprocess.check_output(
+            ["nix", "build", "--no-link", "--json", "-L", *targets], text=True,
+        )
+        results = json.loads(raw)
+        expected = {plan["checks"][name] for name in shard["checks"]}
+        realized = {}
+        if not isinstance(results, list) or not results:
+            raise ValueError("shard produced no Nix build results")
+        for entry in results:
+            if not isinstance(entry, dict):
+                raise ValueError("invalid Nix build result")
+            drv = entry.get("drvPath")
+            outputs = entry.get("outputs")
+            if drv not in expected or not isinstance(outputs, dict) or not outputs:
+                raise ValueError("unexpected or missing shard derivation")
+            paths = []
+            for output in outputs.values():
+                path = output.get("path") if isinstance(output, dict) else output
+                if not isinstance(path, str) or not STORE.fullmatch(path):
+                    raise ValueError("invalid Nix output path")
+                paths.append(path)
+            paths = sorted(set(paths))
+            if drv in realized and realized[drv] != paths:
+                raise ValueError("conflicting realized outputs")
+            realized[drv] = paths
+        if set(realized) != expected:
+            raise ValueError("shard omitted an evaluated check derivation")
         for name in shard["checks"]:
-            target = f".#checks.{plan['system']}.{name}"
-            paths = run_command(["nix", "build", "--no-link", "--print-out-paths", "-L", target]).splitlines()
-            if not paths or not all(STORE.fullmatch(path) for path in paths):
-                raise ValueError(f"{name} returned no valid store paths")
             evidence["checks"][name] = {
                 "drv": plan["checks"][name],
-                "outputs": paths,
+                "outputs": realized[plan["checks"][name]],
                 "status": "pass",
             }
         evidence["status"] = "pass"
