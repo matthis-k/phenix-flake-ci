@@ -85,7 +85,12 @@ jobs:
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
           primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          # PRs may read a trusted main-branch Nix closure using the
+          # identical lockfile/strategy identity. This does not expose OIDC,
+          # delegate secrets, or give PRs write access to main's cache.
+          # Prefer the warm main closure over an older PR-only snapshot.
           restore-prefixes-first-match: |
+            remote-${{ needs.plan.outputs.cache_prefix }}-
             ${{ needs.plan.outputs.cache_prefix }}-
           gc-max-store-size-linux: "4G"
       - name: Prebuild shared declared packages
