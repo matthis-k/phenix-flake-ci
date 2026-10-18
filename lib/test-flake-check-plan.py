@@ -153,6 +153,42 @@ class TestFlakeChecks(unittest.TestCase):
                 planner.verify_command(args)
 
 
+    def test_shard_runs_as_one_concurrent_nix_graph_and_preserves_exact_evidence(self):
+        plan = planner.make_plan(checks("a", "b", "c", "d"), CONFIG, SHA)
+        shard = next(s for s in plan["shards"] if len(s["checks"]) > 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            planner.write_json(root / "plan.json", plan)
+            args = type("Args", (), {"plan": root / "plan.json",
+                                    "shard": shard["id"],
+                                    "output": root / "evidence.json"})
+            entries = [
+                {"drvPath": plan["checks"][name],
+                 "outputs": {"out": {"path": "/nix/store/" + "c" * 32 + "-" + name}}}
+                for name in reversed(shard["checks"])
+            ]
+            with mock.patch.object(planner, "run_command", return_value=SHA), \
+                 mock.patch.object(planner.subprocess, "check_output",
+                                   return_value=json.dumps(entries)) as build:
+                planner.build_command(args)
+            expected = [".#checks.x86_64-linux." + name for name in shard["checks"]]
+            build.assert_called_once_with(
+                ["nix", "build", "--no-link", "--json", "-L", *expected],
+                text=True)
+            evidence = json.loads((root / "evidence.json").read_text())
+            self.assertEqual(evidence["status"], "pass")
+            self.assertEqual(set(evidence["checks"]), set(shard["checks"]))
+            # A valid result must match the evaluated drv, not just the label.
+            entries[0]["drvPath"] = "/nix/store/" + "d" * 32 + "-wrong.drv"
+            with mock.patch.object(planner, "run_command", return_value=SHA), \
+                 mock.patch.object(planner.subprocess, "check_output",
+                                   return_value=json.dumps(entries)):
+                with self.assertRaisesRegex(ValueError, "unexpected"):
+                    planner.build_command(args)
+            failed = json.loads((root / "evidence.json").read_text())
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["checks"], {})
+
     def test_prebuild_uses_one_concurrent_nix_invocation(self):
         config = {**CONFIG, "prebuildTargets": [".#kernel", ".#shared-plugin"]}
         plan = planner.make_plan(checks("a"), config, SHA)
