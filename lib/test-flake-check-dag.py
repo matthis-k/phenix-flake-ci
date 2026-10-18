@@ -87,6 +87,41 @@ class DagTests(unittest.TestCase):
         self.assertEqual(dag.graph_summary(plan, mkgraph()),
                          dag.graph_summary(plan, modern))
 
+    def test_publish_requires_verified_evidence_and_copies_only_outputs(self):
+        plan = mkplan()
+        graph = dag.graph_summary(plan, mkgraph())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dag.save(root / "plan.json", plan)
+            dag.save(root / "graph.json", graph)
+            dag.save(root / "evidence.json", {
+                "schemaVersion": dag.SCHEMA, "planDigest": plan["digest"],
+                "graphDigest": graph["graphDigest"], "commit": plan["commit"],
+                "system": plan["system"], "mode": "native-nix-dag",
+                "checks": {name: {"drv": drvpath, "status": "pass", "outputs": [output("f", name)]}
+                           for name, drvpath in plan["checks"].items()},
+            })
+            args = type("Args", (), {"plan": root / "plan.json",
+                                     "graph": root / "graph.json",
+                                     "evidence": root / "evidence.json",
+                                     "to": "file:///tmp/verified-nix-cache"})
+            with mock.patch.object(dag.subprocess, "run") as copy:
+                dag.publish_command(args)
+            copy.assert_called_once_with([
+                "nix", "copy", "--to", args.to,
+                *sorted(output("f", name) for name in plan["checks"])], check=True)
+            args.to = "https://example.com/untrusted"
+            with self.assertRaisesRegex(ValueError, "destination"):
+                dag.publish_command(args)
+            args.to = "file:///tmp/verified-nix-cache"
+            broken = json.loads((root / "evidence.json").read_text())
+            del broken["checks"]["shipping"]
+            dag.save(root / "evidence.json", broken)
+            with mock.patch.object(dag.subprocess, "run") as copy:
+                with self.assertRaisesRegex(ValueError, "complete|cover"):
+                    dag.publish_command(args)
+                copy.assert_not_called()
+
     def test_incomplete_and_cyclic_nix_graph_rejected(self):
         plan = mkplan()
         graph = mkgraph()

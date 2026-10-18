@@ -249,6 +249,27 @@ def verify_command(args):
     print(f"PASS: {len(checks)} checked derivations, complete exact-head DAG evidence")
 
 
+def publish_command(args):
+    """Publish only outputs that passed complete exact-head DAG verification."""
+    verify_command(args)
+    from urllib.parse import urlsplit
+
+    dest = urlsplit(args.to)
+    if (dest.scheme not in ("s3", "ssh-ng", "file")
+            or not (dest.netloc or dest.path)
+            or dest.password is not None):
+        raise ValueError("publish destination must be a configured s3, ssh-ng or file Nix store")
+    evidence = json.loads(Path(args.evidence).read_text())
+    outputs = sorted({path for check in evidence["checks"].values()
+                      for path in check["outputs"]})
+    if not outputs:
+        raise ValueError("no verified outputs to publish")
+    # nix copy recursively transfers the referenced Nix closures. The native
+    # store handles deduplication, authentication, signing and substitutions.
+    subprocess.run(["nix", "copy", "--to", args.to, *outputs], check=True)
+    print(f"Published {len(outputs)} verified check outputs and their closures")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
@@ -267,6 +288,12 @@ def main():
     c.add_argument("--graph", required=True)
     c.add_argument("--evidence", required=True)
     c.set_defaults(func=verify_command)
+    d = subs.add_parser("publish")
+    d.add_argument("--plan", required=True)
+    d.add_argument("--graph", required=True)
+    d.add_argument("--evidence", required=True)
+    d.add_argument("--to", required=True, help="Trusted writable Nix store URI")
+    d.set_defaults(func=publish_command)
     args = parser.parse_args()
     try:
         args.func(args)

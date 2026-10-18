@@ -192,6 +192,14 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json
+      - name: Publish verified outputs to shared Nix store (trusted runs only)
+        if: ${{ github.event_name != 'pull_request' && vars.NIX_BINARY_CACHE_DESTINATION != '' }}
+        env:
+          DESTINATION: ${{ vars.NIX_BINARY_CACHE_DESTINATION }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py publish \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --evidence ci-result/evidence.json --to "$DESTINATION"
       - name: Release ephemeral workers
         if: always()
         run: |

@@ -73,6 +73,31 @@ The automated Python test suite validates host naming, matrix enumeration,
 SSH-store discovery and missing-worker failure. It cannot validate live
 tailnet authentication, Nix remote-build permissions, or cross-runner speed.
 
+## Optional shared binary cache publication
+
+The remote coordinator can publish the complete verified check output closures
+to an existing writable Nix store instead of relying only on the ephemeral
+GitHub Actions cache archive. This is **opt-in**: configure the repository
+variable `NIX_BINARY_CACHE_DESTINATION` with a writable Nix store URI,
+such as `s3://bucket/path` or an authorized `ssh-ng://builder` store.
+The runner must already have the corresponding credentials and Nix store
+trust configuration. Never put a credential in the repository variable.
+
+After the exact-head DAG verifier passes, the coordinator invokes
+`flake-check-dag.py publish`. This calls native `nix copy --to` for the
+verified store paths, recursively publishing all referenced build closures
+(kernel, plugins, agents, native libraries) with Nix's own identity semantics.
+Only trusted push/manual execution may publish. Pull requests never write.
+The existing store cache action remains a fallback; an unset destination
+changes nothing. Cache consumers must configure an authorized read-only
+substituter and its signing public key separately.
+
+The output publisher does not discover extra package lists or maintain a
+second build graph. If a consumer wants additional package artifacts in the
+published closure, it must include them through authoritative Nix checks.
+Test the configured destination and substitution on real workers before
+claiming cross-run or cross-machine cache savings.
+
 ## Benchmark
 
 Run 2, 4 and 8 workers sequentially on the same immutable consumer commit
