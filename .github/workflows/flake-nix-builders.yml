@@ -8,6 +8,7 @@ on:
       worker_count: { type: number, default: 4 }
       slots_per_worker: { type: number, default: 2 }
       cache_namespace: { type: string, default: "" }
+      cache_max_store_size_linux: { type: string, default: "6G" }
       artifact_namespace: { type: string, default: "" }
     secrets:
       TS_OAUTH_CLIENT_ID: { required: false }
@@ -158,7 +159,7 @@ jobs:
           primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
-          gc-max-store-size-linux: "4G"
+          gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Name coordinator uniquely for this invocation
         id: node
         run: echo "hostname=fc-${{ github.run_id }}-${{ github.run_attempt }}-n${{ inputs.worker_count }}-ctl" >> "$GITHUB_OUTPUT"
