@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+import subprocess
 
 spec = importlib.util.spec_from_file_location(
     "flake_check_plan", Path(__file__).with_name("flake-check-plan.py"))
@@ -212,6 +213,41 @@ class TestFlakeChecks(unittest.TestCase):
                              "mocked build must not invent a root")
             evidence = json.loads((root / "prebuild.json").read_text())
             self.assertEqual(set(evidence["outputs"]), set(config["prebuildTargets"]))
+
+    def test_prebuild_gc_roots_survive_cache_post_job_collection(self):
+        config = {**CONFIG, "prebuildTargets": [".#kernel", ".#shared-plugin"]}
+        plan = planner.make_plan(checks("a"), config, SHA)
+        output = "/nix/store/" + "c" * 32 + "-example-output"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            planner.write_json(root / "plan.json", plan)
+            args = type("Args", (), {
+                "plan": root / "plan.json",
+                "output": root / "prebuild.json",
+                "gc_roots_dir": root / "roots",
+            })
+
+            def fake_command(argv):
+                return SHA if argv[0] == "git" else output
+
+            with mock.patch.object(planner, "run_command", side_effect=fake_command), \
+                 mock.patch.object(planner.subprocess, "run") as proc:
+                planner.prebuild_command(args)
+
+            self.assertTrue((root / "roots").is_dir())
+            # One root per distinct output, not one per alias/target.
+            self.assertEqual(proc.call_count, 2)
+            self.assertEqual(proc.call_args_list[0], mock.call(
+                ["nix", "build", "--no-link", "-L", ".#kernel", ".#shared-plugin"],
+                check=True,
+            ))
+            self.assertEqual(proc.call_args_list[1], mock.call(
+                ["nix-store", "--realise", "--add-root",
+                 str(root / "roots" / "shared-0000"), output],
+                check=True, stdout=subprocess.DEVNULL,
+            ))
+            recorded = json.loads((root / "prebuild.json").read_text())
+            self.assertEqual(set(recorded["outputs"]), set(config["prebuildTargets"]))
 
     def test_prebuild_must_be_locally_restored_not_rebuilt_by_shard(self):
         cfg = {**CONFIG, "prebuildTargets": [".#shared"]}
