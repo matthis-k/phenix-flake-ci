@@ -137,7 +137,7 @@ class RemoteBuildersTest(unittest.TestCase):
         # The namespace appears in both the primary and restore prefix.
         self.assertGreaterEqual(coordinator.count("inputs.cache_namespace"), 2)
         self.assertIn("github.sha", coordinator)
-        self.assertIn("gc-max-store-size-linux: \"4G\"", coordinator)
+        self.assertIn("gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}", coordinator)
 
     def test_remote_coordinator_has_trusted_cross_run_nix_cache(self):
         """A second full run should actually reuse Nix output paths.
@@ -157,7 +157,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}", coordinator)
         self.assertIn("restore-prefixes-first-match:", coordinator)
         self.assertIn("remote-${{ needs.plan.outputs.cache_prefix }}-", coordinator)
-        self.assertIn('gc-max-store-size-linux: "4G"', coordinator)
+        self.assertIn("gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}", coordinator)
         self.assertLess(coordinator.index("Restore and save trusted remote Nix store"),
                         coordinator.index("Native Nix scheduler executes all exact-head checks"))
         self.assertNotIn("cache-nix-action", worker)
