@@ -204,9 +204,12 @@ class TestFlakeChecks(unittest.TestCase):
                     planner, "run_command", side_effect=fake_command) as command:
                 planner.prebuild_command(args)
             build.assert_called_once_with(
-                ["nix", "build", "--no-link", "-L", ".#kernel", ".#shared-plugin"],
+                ["nix", "build", "--out-link", str(root / "shared-prebuild-root"), "-L",
+                 ".#kernel", ".#shared-plugin"],
                 check=True)
             self.assertEqual(command.call_count, 3)
+            self.assertFalse((root / "shared-prebuild-root").exists(),
+                             "mocked build must not invent a root")
             evidence = json.loads((root / "prebuild.json").read_text())
             self.assertEqual(set(evidence["outputs"]), set(config["prebuildTargets"]))
 
