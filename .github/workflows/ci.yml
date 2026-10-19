@@ -40,6 +40,9 @@ jobs:
       - name: Test generated DAG stages and store transfers
         run: python3 lib/test-flake-dag-stages.py -v
 
+      - name: Verify shared cache retention and read-only shards
+        run: python3 lib/test-cache-retention-workflows.py -v
+
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
 

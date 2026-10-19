@@ -238,7 +238,8 @@ class TestFlakeChecks(unittest.TestCase):
             # One root per distinct output, not one per alias/target.
             self.assertEqual(proc.call_count, 2)
             self.assertEqual(proc.call_args_list[0], mock.call(
-                ["nix", "build", "--no-link", "-L", ".#kernel", ".#shared-plugin"],
+                ["nix", "build", "--out-link", str(root / "shared-prebuild-root"),
+                 "-L", ".#kernel", ".#shared-plugin"],
                 check=True,
             ))
             self.assertEqual(proc.call_args_list[1], mock.call(
