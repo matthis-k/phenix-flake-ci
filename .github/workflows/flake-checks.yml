@@ -11,6 +11,10 @@ on:
         description: Exact commit of the called phenix-flake-ci workflow
         type: string
         required: true
+      cache_max_store_size_linux:
+        description: Maximum Linux Nix store retained in the shared Actions cache
+        type: string
+        default: "6G"
 
 permissions:
   contents: read
@@ -92,7 +96,7 @@ jobs:
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-
             ${{ needs.plan.outputs.cache_prefix }}-
-          gc-max-store-size-linux: "4G"
+          gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Prebuild shared declared packages
         shell: bash
         run: |
