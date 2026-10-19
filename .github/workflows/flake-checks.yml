@@ -98,7 +98,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
-            --plan ci-plan/plan.json --output ci-plan/prebuild.json
+            --plan ci-plan/plan.json --output ci-plan/prebuild.json \
+            --gc-roots-dir "${RUNNER_TEMP}/phenix-shared-prebuild-roots"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flake-prebuild-evidence
