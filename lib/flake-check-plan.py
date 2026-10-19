@@ -262,7 +262,13 @@ def prebuild_command(args):
     # Previously one Nix build per target serialized otherwise independent
     # packages on the critical path of all shards.
     if targets:
-        subprocess.run(["nix", "build", "--no-link", "-L", *targets], check=True)
+        # The cache writer runs Nix GC before uploading its store archive.
+        # Keep an explicit GC root for every built output until that upload
+        # finishes; --no-link lets GC discard the declared prebuild hotset.
+        # Nix creates numbered out-links for multiple installables.
+        root = Path(args.output).parent / "shared-prebuild-root"
+        root.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["nix", "build", "--out-link", str(root), "-L", *targets], check=True)
     results = {}
     for target in targets:
         # Read realized store identity only after the combined build. This
