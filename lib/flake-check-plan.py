@@ -271,6 +271,22 @@ def prebuild_command(args):
         if not outputs or not all(STORE.fullmatch(path) for path in outputs):
             raise ValueError(f"prebuild target {target!r} returned invalid store paths")
         results[target] = outputs
+    # The Nix store cache action performs garbage collection in its post-job
+    # hook. Without GC roots it can remove a just-built shared output before
+    # saving the cache, even when the build and evidence both succeeded.
+    # Protect exactly the declared hotset plus its reference closures.
+    gc_roots_dir = getattr(args, "gc_roots_dir", None)
+    if gc_roots_dir is not None:
+        roots = Path(gc_roots_dir)
+        roots.mkdir(parents=True, exist_ok=True)
+        shared_outputs = sorted({path for paths in results.values() for path in paths})
+        for index, path in enumerate(shared_outputs):
+            subprocess.run(
+                ["nix-store", "--realise", "--add-root",
+                 str(roots / f"shared-{index:04d}"), path],
+                check=True, stdout=subprocess.DEVNULL,
+            )
+        print(f"Protected {len(shared_outputs)} shared outputs from post-job Nix GC")
     write_json(args.output, {"schemaVersion": SCHEMA, "digest": plan["digest"],
                              "commit": commit, "outputs": results})
     print(f"Prebuilt {len(results)} shared Nix targets at {commit}")
@@ -369,6 +385,8 @@ def main():
     p = subs.add_parser("prebuild")
     p.add_argument("--plan", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--gc-roots-dir",
+                   help="Protect realized shared outputs from post-job cache GC")
     p.set_defaults(func=prebuild_command)
     p = subs.add_parser("prebuild-local")
     p.add_argument("--plan", required=True)
