@@ -10,6 +10,9 @@ on:
       library_ref:
         type: string
         required: true
+      cache_max_store_size_linux:
+        type: string
+        default: "6G"
 
 permissions:
   contents: read
@@ -107,7 +110,7 @@ jobs:
           primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
           restore-prefixes-first-match: |
             ${{ needs.plan.outputs.cache_prefix }}-
-          gc-max-store-size-linux: "4G"
+          gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Build compatible shared artifacts concurrently
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
