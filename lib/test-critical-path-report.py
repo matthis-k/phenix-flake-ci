@@ -47,7 +47,7 @@ class CriticalPathReportTests(unittest.TestCase):
         run, jobs = sample()
         result = subject.report(run, jobs, HEAD)
         self.assertEqual(result["workflow_wall_seconds"], 300)
-        self.assertEqual(result["runner_minutes"], 343 / 60 if False else 5.72)
+        self.assertEqual(result["runner_minutes"], 5.72)
         self.assertEqual(result["tail_shard"], "02")
         self.assertEqual(result["shards"], {"00": 70, "02": 200})
         self.assertEqual(result["last_finished_job"],
