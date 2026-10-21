@@ -52,6 +52,9 @@ jobs:
       - name: Test full Nix workflow critical-path reporter
         run: python3 lib/test-critical-path-report.py -v
 
+      - name: Test actual per-shard Nix build duplication reporter
+        run: python3 lib/test-shard-build-report.py -v
+
       - name: Print exact consumer flake source identity
         if: github.ref == 'refs/heads/main'
         run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"
