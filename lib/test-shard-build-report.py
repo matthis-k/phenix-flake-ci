@@ -22,9 +22,9 @@ def build(path, ts="2026-10-21T11:32:12.1234567Z"):
 class ShardBuildReportTests(unittest.TestCase):
     def test_exact_path_identity_not_display_name(self):
         logs = {
-            "00": "\\n".join([build(A), build(B)]),
-            "01": "\\n".join([build(A), build(C)]),
-            "02": "\\n".join([build(A), build(B), build(C)]),
+            "00": "\n".join([build(A), build(B)]),
+            "01": "\n".join([build(A), build(C)]),
+            "02": "\n".join([build(A), build(B), build(C)]),
         }
         result = subject.analyze(logs)
         self.assertEqual(result["build_events"], 7)
@@ -42,12 +42,12 @@ class ShardBuildReportTests(unittest.TestCase):
         self.assertEqual(result["repeated_build_events"], 0)
 
     def test_repeat_attempt_not_confused_with_cross_shard_duplication(self):
-        result = subject.analyze({"00": build(A) + "\\n" + build(A), "01": build(B)})
+        result = subject.analyze({"00": build(A) + "\n" + build(A), "01": build(B)})
         self.assertEqual(result["repeated_events_within_a_shard"], 1)
         self.assertEqual(result["repeated_events_across_shards"], 0)
 
     def test_excludes_substitutions_and_repeated_error_summaries(self):
-        log = "\\n".join([
+        log = "\n".join([
             f"2026-10-21T11:32:12.123Z copying path '{A}' from cache...",
             f"2026-10-21T11:32:12.123Z        > building '{B}'...",
             "building 'relative-no-store-path.drv'...",
