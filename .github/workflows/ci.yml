@@ -49,6 +49,9 @@ jobs:
       - name: Test exact-head remote benchmark comparator
         run: python3 lib/test-compare-remote-benchmarks.py -v
 
+      - name: Test full Nix workflow critical-path reporter
+        run: python3 lib/test-critical-path-report.py -v
+
       - name: Print exact consumer flake source identity
         if: github.ref == 'refs/heads/main'
         run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"
