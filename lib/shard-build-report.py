@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline, read-only duplicate Nix derivation build-event evidence across shards."""
 import argparse
-from collections import Counter, defaultdict
+from collections import defaultdict
 import json
 from pathlib import Path
 import re
@@ -9,8 +9,8 @@ import re
 # Match only direct Nix "building" announcements, never quoted last-log
 # summaries, cache substitutions, copied paths, or compiler diagnostics.
 BUILD = re.compile(
-    r"^(?:\\d{4}-\\d\\d-\\d\\dT[^ ]+Z )?"
-    r"building '(/nix/store/[a-z0-9]{32}-[^'\\n]+\\.drv)'\\.\\.\\.$"
+    r"^(?:\d{4}-\d\d-\d\dT[^ ]+Z )?"
+    r"building '(/nix/store/[a-z0-9]{32}-[^'\n]+\.drv)'\.\.\.$"
 )
 
 
