@@ -35,3 +35,43 @@ The `jobs.json` file must contain the **complete** `jobs` array and matching `to
 3. Keep full negative/ABI/ACP/shipping acceptance, unchanged-plugin derivation paths and original five-shard coverage. Abandon experiments that regress wall time, as happened with the broad Basic prebuild in #1024.
 
 No optimization is claimed by the reporting PR.
+
+## B2 direct-shard build announcements (same #1030 run)
+
+All five complete successful shard job logs were inspected for lines matching Nix's
+literal `building '/nix/store/<derivation>.drv'...` announcement. Unlike the
+B1 job-timing reporter, `lib/shard-build-report.py` counts **full derivation
+paths**, not names, and excludes cache `copying path` notices and log excerpts.
+
+| Shard | Build announcements |
+| --- | ---: |
+| 00 | 122 |
+| 01 | 36 |
+| 02 | 160 |
+| 03 | 80 |
+| 04 | 105 |
+| **Total** | **503** |
+
+The five logs contain **197 distinct drv paths** and **142 drv paths appearing
+in multiple shards**. There are **306 repeated build announcements** beyond
+one announcement per unique path (503 − 197). These are log observations for
+[#1030's 40m01s workflow](https://github.com/matthis-k/phenix-ai/actions/runs/39460347034),
+not timing attribution or proof that all 306 were physically rebuilt after a
+successful Nix exit. The execution profile depends on the trusted-cache state.
+
+Reproduction after downloading *all five* shard job logs and verifying they
+come from the same completed successful exact-head run:
+
+```sh
+python3 lib/shard-build-report.py \\
+  --shard 00=shard-00.log --shard 01=shard-01.log \\
+  --shard 02=shard-02.log --shard 03=shard-03.log \\
+  --shard 04=shard-04.log
+python3 lib/test-shard-build-report.py -v
+```
+
+A B2 optimization must compare this output and workflow wall/runner minutes,
+shared writer time, substitution volume and cache payload sizes under paired
+cache-state-controlled real runs. This reporter is **offline evidence only**;
+it neither changes scheduling nor transfers build artifacts. The rejected
+broad prebuild #1024 must not be reintroduced on duplication counts alone.
