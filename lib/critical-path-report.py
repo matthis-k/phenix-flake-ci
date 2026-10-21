@@ -64,12 +64,14 @@ def report(run, response, expected_head):
     shard_jobs = [j for j in metrics if "Check shard-" in j["name"]]
     if not shard_jobs:
         raise ValueError("no Nix check shards in this run")
+    tail_shard = max(shard_jobs, key=lambda item: item["completed_at"])
     return {
         "head": expected_head, "run_id": run["id"],
         "workflow_wall_seconds": wall,
         "runner_minutes": round(sum(item["seconds"] for item in metrics) / 60, 2),
         "last_finished_job": slowest["name"],
         "last_finished_seconds": slowest["seconds"],
+        "tail_shard": tail_shard["name"].split("Check shard-")[-1],
         "shards": {j["name"].split("Check shard-")[-1]: j["seconds"]
                    for j in sorted(shard_jobs, key=lambda item: item["name"])},
         "initial_idle_seconds": (min(j["started_at"] for j in metrics) - started).total_seconds(),
