@@ -14,6 +14,7 @@ Source: GitHub Actions run and jobs APIs for the `matthis-k/phenix-ai` exact-hea
 - Different changes produce different cache and invalidation profiles; #1039's last shard was 00, not 02. Do not hard-code a single shard as the bottleneck.
 - Runner-minutes are summed on actual job times, not workflow duration multiplied by five. The difference measures parallelism, not billed GitHub usage.
 - These three runs use different changes and cache states. They are **diagnostic observations, not an A/B speedup experiment**. They do not establish causal duplicate compilation or remote-cache substitutions.
+- The workflow `updated_at` timestamp includes final aggregation/notification lag; compare job `started_at`/`completed_at` separately. A last-finishing shard identifies the measured tail, not a reconstructed dependency critical path.
 
 ## Reproduce with offline artifacts
 
