@@ -56,7 +56,7 @@ jobs:
       - name: Restore compatible verified-main Nix store (read-only)
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: local-dag-${{ steps.plan.outputs.cache_prefix }}-${{ github.sha }}
+          primary-key: local-dag-${{ steps.plan.outputs.cache_prefix }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-prefixes-first-match: |
             remote-${{ steps.plan.outputs.cache_prefix }}-
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
@@ -80,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: local-dag-${{ github.sha }}
+          name: local-dag-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ci-plan/plan.json
             ci-plan/graph.json
