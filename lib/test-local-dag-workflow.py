@@ -77,6 +77,17 @@ class LocalDagWorkflowTest(unittest.TestCase):
             self.assertIn("flake-check-plan.py plan", workflow)
             self.assertIn("steps.plan.outputs.cache_prefix", workflow)
             self.assertIn("remote-${{ steps.plan.outputs.cache_prefix }}-", workflow)
+            # A changed strategy must invalidate the namespace rather than
+            # inheriting an unrelated trusted-main cache.
+            updated = json.loads(config.read_text())
+            updated["strategy"] = "different-strategy"
+            config.write_text(json.dumps(updated))
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": str(gh_output)}):
+                planner.plan_command(SimpleNamespace(
+                    config=str(config), inventory=str(checks),
+                    flake=".", commit="a" * 40, output=str(plan),
+                ))
+            self.assertNotEqual(json.loads(plan.read_text())["cachePrefix"], expected)
 
 
 if __name__ == "__main__":
