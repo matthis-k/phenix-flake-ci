@@ -37,6 +37,9 @@ jobs:
       - name: Test generated native Nix DAG scheduler
         run: python3 lib/test-flake-check-dag.py -v
 
+      - name: Test untrusted single-store Nix DAG workflow boundaries
+        run: python3 lib/test-local-dag-workflow.py -v
+
       - name: Test generated DAG stages and store transfers
         run: python3 lib/test-flake-dag-stages.py -v
 

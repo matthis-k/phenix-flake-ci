@@ -1,0 +1,88 @@
+# Untrusted PR candidate. The same flake-defined check inventory and verified
+# Nix derivation graph used by phenix-flake-ci's distributed backend are
+# executed in one local Nix store: no redundant cross-shard compilations.
+# Do not grant PRs Tailscale/OIDC credentials or cache publication authority.
+name: Generic single-store exact-head Nix DAG
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Consumer's declarative Nix check strategy
+        type: string
+        required: true
+      library_ref:
+        description: Immutable commit of phenix-flake-ci
+        type: string
+        required: true
+      cache_max_store_size_linux:
+        type: string
+        default: "6G"
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head:
+    name: Full Nix DAG and evidence (untrusted)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Evaluate full exact-head check inventory and dependency DAG
+        id: plan
+        shell: bash
+        env:
+          CONFIG_FILE: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-plan
+          nix eval --json --file "$CONFIG_FILE" > ci-plan/config.json
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py plan \
+            --config ci-plan/config.json --output ci-plan/plan.json
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
+            --plan ci-plan/plan.json --output ci-plan/graph.json
+      - name: Restore compatible verified-main Nix store (read-only)
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: local-dag-${{ steps.plan.outputs.cache_prefix }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-prefixes-first-match: |
+            remote-${{ steps.plan.outputs.cache_prefix }}-
+          gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
+          save: false
+      - name: Execute every evaluated check in one native Nix DAG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py build \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --output ci-evidence/evidence.json
+      - name: Require complete exact-head derivation and result evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --evidence ci-evidence/evidence.json
+      - name: Preserve plan, graph and realized outputs for comparison
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: local-dag-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ci-plan/plan.json
+            ci-plan/graph.json
+            ci-evidence/evidence.json
+          if-no-files-found: warn
