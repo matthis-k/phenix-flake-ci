@@ -69,3 +69,42 @@ credential-free staged DAG backend. Neither changes the check list.
 The older `mkFlakeCiWorkflow` remains a useful low-level one-workflow
 renderer, while `mkFlakeCiWorkflows` is the default **usage-first** entrypoint
 for repositories requiring both trusted push and untrusted PR execution.
+
+## Automatically discovered runnable test packages
+
+The repository may expose any number of executable packages with the flat
+`test.<name>` prefix under `packages.<system>`. This is a **generic
+artifact convention**, not a special CI understanding of any domain:
+
+```nix
+packages.x86_64-linux."test.smoke" = pkgs.writeShellApplication {
+  name = "test-smoke";
+  runtimeInputs = [ existingRuntime ];
+  text = ''
+    exec ${existingRuntime}/bin/example-runtime --config ${existingConfig}
+  '';
+};
+```
+
+The library discovers them by evaluating the flake, without maintaining a
+second list, compiles their exact output closures in the same native Nix
+coordinator as the existing checks, and creates **one separate job per test
+package** after the coordinator. Each test job only has read permissions:
+it restores the compiled store, verifies the expected output is present
+without substitution, and executes `nix run --offline`. The final shipping
+gate requires exact-head evidence for all discovered tests, even when one
+fails. An empty test package inventory is valid.
+
+The package implementation may use a language-specific test builder or be a
+thin wrapper over an existing runtime and configuration. Build artifacts
+should contain actual test programs; test execution should not recompile.
+The library does not implement a domain-specific composition loader and
+does not infer privileges, bindings or runtime semantics.
+
+**Migration:** Existing `checks` remain mandatory. Some legacy check
+derivations already execute tests during their Nix build; these still run
+as before. New `test.*` packages are executed after build and verified
+separately. Move old test work into runnable packages only once exact-head
+shipping parity is demonstrated. The coordinator's GitHub Actions Nix
+cache has a finite retention size; a missing test closure fails closed.
+A dedicated binary cache can remove this operational limitation.
