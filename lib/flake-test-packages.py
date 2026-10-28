@@ -140,12 +140,32 @@ def build_command(args):
     print(f"Built {len(tests)} executable test packages through the native scheduler")
 
 
+def export_command(args):
+    plan = validate(load(args.plan))
+    verify_head(plan)
+    roots = sorted({entry["out"] for entry in plan["tests"].values()})
+    if not roots:
+        return
+    paths = subprocess.check_output(
+        ["nix", "path-info", "--offline", "--recursive", *roots],
+        text=True).splitlines()
+    if not set(roots).issubset(paths):
+        raise ValueError("test export is missing planned roots")
+    destination = Path(args.output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as stream:
+        subprocess.run(["nix-store", "--export", *sorted(set(paths))],
+                       stdout=stream, check=True)
+
+
 def run_command(args):
     plan = validate(load(args.plan))
     verify_head(plan)
     if args.name not in plan["tests"]:
         raise ValueError("test job not in exact-head package inventory")
     entry = plan["tests"][args.name]
+    with open(args.closure, "rb") as stream:
+        subprocess.run(["nix-store", "--import"], stdin=stream, check=True)
     # Deliberately fail rather than rebuilding on a test runner.
     paths = subprocess.check_output(
         ["nix", "path-info", "--offline", entry["out"]], text=True).splitlines()
@@ -203,11 +223,16 @@ def main():
     c.add_argument("--plan", required=True)
     c.add_argument("--name", required=True)
     c.add_argument("--output", required=True)
+    c.add_argument("--closure", required=True)
     c.set_defaults(func=run_command)
     d = subs.add_parser("verify")
     d.add_argument("--plan", required=True)
     d.add_argument("--results", required=True)
     d.set_defaults(func=verify_command)
+    e = subs.add_parser("export")
+    e.add_argument("--plan", required=True)
+    e.add_argument("--output", required=True)
+    e.set_defaults(func=export_command)
     args = parser.parse_args()
     try:
         args.func(args)

@@ -124,7 +124,8 @@ The library discovers them by evaluating the flake, without maintaining a
 second list, compiles their exact output closures in the same native Nix
 coordinator as the existing checks, and creates **one separate job per test
 package** after the coordinator. Each test job only has read permissions:
-it restores the compiled store, verifies the expected output is present
+it imports the coordinator's required same-run Nix export artifact (including
+recursive runtime dependencies), verifies the expected output is present
 without substitution, and executes `nix run --offline`. The final shipping
 gate requires exact-head evidence for all discovered tests, even when one
 fails. An empty test package inventory is valid.
@@ -139,9 +140,11 @@ does not infer privileges, bindings or runtime semantics.
 derivations already execute tests during their Nix build; these still run
 as before. New `test.*` packages are executed after build and verified
 separately. Move old test work into runnable packages only once exact-head
-shipping parity is demonstrated. The coordinator's GitHub Actions Nix
-cache has a finite retention size; a missing test closure fails closed.
-A dedicated binary cache can remove this operational limitation.
+shipping parity is demonstrated. The read-only GitHub Actions Nix cache is
+only an optimization, not the test closure handoff. Missing artifacts, failed
+exports/imports, or absent planned outputs fail closed without compilation
+on test runners. The closure artifact is subject to GitHub artifact storage
+and transfer limits.
 
 ## Optional Cargo test artifacts (language-specific adapter)
 

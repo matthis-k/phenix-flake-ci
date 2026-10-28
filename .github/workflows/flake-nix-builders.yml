@@ -197,6 +197,18 @@ jobs:
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json --timing ci-result/timing.json \
             --test-packages ci-plan/test-packages.json --test-root ci-result/test-package-roots
+      - name: Export runnable test runtime closures
+        if: needs.plan.outputs.test_count != '0'
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py export \
+            --plan ci-plan/test-packages.json --output ci-test-closure/closure.nar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: needs.plan.outputs.test_count != '0'
+        with:
+          name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-test-closure/closure.nar
+          if-no-files-found: error
+          compression-level: 0
       - name: Verify complete DAG shipping evidence
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
@@ -257,12 +269,17 @@ jobs:
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
           save: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-test-closure/
       - name: Run exactly one already-built test package (no silent recompilation)
         env:
           TEST_NAME: ${{ matrix.name }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py run \
             --plan ci-plan/test-packages.json --name "$TEST_NAME" \
+            --closure ci-test-closure/closure.nar \
             --output "ci-result/evidence.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
