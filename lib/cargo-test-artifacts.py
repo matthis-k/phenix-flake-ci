@@ -62,7 +62,7 @@ def install(input_file, output, metadata_file):
             raise ValueError("Cargo test package is not a recognized workspace member")
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise ValueError(f"missing compiled Cargo test binary: {source}")
-        suffix = hashlib.sha256((package + "\\0" + name).encode()).hexdigest()[:12]
+        suffix = hashlib.sha256((package + "\0" + name).encode()).hexdigest()[:12]
         group = output / crate
         group.mkdir(exist_ok=True)
         destination = group / f"{index:04d}-{suffix}"
@@ -71,7 +71,7 @@ def install(input_file, output, metadata_file):
         manifest.append({"package": crate, "packageId": package,
                          "target": name, "binary": f"{crate}/{destination.name}"})
     (output.parent / "cargo-tests.json").write_text(
-        json.dumps(manifest, sort_keys=True, indent=2) + "\\n")
+        json.dumps(manifest, sort_keys=True, indent=2) + "\n")
     print(f"Packaged {len(manifest)} already-compiled Cargo test executables "
           f"from {len(set(item['package'] for item in manifest))} workspace crates")
 
