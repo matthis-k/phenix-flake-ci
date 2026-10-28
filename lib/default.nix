@@ -6,6 +6,7 @@ let
   mkFlakeCiWorkflows = import ./mk-flake-ci-workflows.nix;
   mkCargoTestPackage = import ./mk-cargo-test-package.nix;
   mkTest = import ./mk-test.nix;
+  mkTestCases = import ./mk-test-cases.nix;
   mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
@@ -110,6 +111,7 @@ in
     maintenanceCommandGraph
     mkCi
     mkTest
+    mkTestCases
     mkFlakeCheckConfig
     mkFlakeCiWorkflow
     mkFlakeCiWorkflows

@@ -87,11 +87,77 @@ Fixtures are literal text files relative to the test workspace. All environment 
 | exitCode | Bare exact value, eq, ne, gt, gte, lt, lte |
 | stdout, stderr | empty, eq, ne, contains, matches, json |
 | stdout.json."/pointer" | Bare exact value, eq, ne, contains, matches, gt, gte, lt, lte |
-| files."relative/path" | exists = true or false |
+| files."relative/path" | exists, text.{eq,ne,contains,matches,empty}, json."/pointer", size with numeric predicates |
 
 String contains accepts one substring or a list of substrings (all must match). matches uses regex search. JSON selectors use RFC 6901 JSON Pointer. Object contains checks recursive subset inclusion. Numeric predicates require numbers, not booleans.
 
-File contents and metadata assertions and cross-step value comparisons are **not** yet implemented.
+File size is measured in bytes; file text is read as strict UTF-8. File JSON assertions use the same JSON Pointer semantics as stdout. Content assertions imply exists = true unless explicitly declared. Missing files fail presence assertions rather than aborting the check. Metadata predicates beyond byte size are not yet supported.
+
+
+## References between steps
+
+A reference is tagged data with the shape { ref = { step = "id"; field = "stdout"; json = "/path"; }; }. The json selector is optional and valid only for stdout/stderr. Other supported fields are stderr and exitCode. References point **only to earlier steps**, by ID. A forward, unknown or self reference is rejected before any command executes.
+
+References can be used inside assertion predicates and command arguments. Argument references must resolve to strings; no implicit stringification or shell interpolation occurs.
+
+```nix
+checks.${system}.session = ciLib.mkTest {
+  inherit pkgs;
+  name = "session";
+  steps = [
+    {
+      id = "create";
+      command = {
+        program = lib.getExe packages.cli;
+        args = [ "create" "--json" ];
+      };
+    }
+    {
+      id = "inspect";
+      command = {
+        program = lib.getExe packages.cli;
+        args = [
+          "inspect"
+          { ref = { step = "create"; field = "stdout"; json = "/id"; }; }
+        ];
+      };
+      expect.stdout.json."/id" = {
+        eq = { ref = { step = "create"; field = "stdout"; json = "/id"; }; };
+      };
+    }
+  ];
+};
+```
+
+If an earlier step fails to produce a referenced observation, the consuming assertion fails with a clear reason. If a command argument cannot be resolved, that command is **not executed**; later unrelated steps continue. Every reference is resolved from the recorded observation, never by re-executing its producer. A singleton { ref = ...; } attribute set is reserved for references.
+
+## Generating independent cases
+
+Use mkTestCases when the same executable or fixtures support several independently schedulable tests. Defaults for command, env and fixtures are shallowly merged with each case. All cases become ordinary Nix check derivations, not steps in one shared test.
+
+```nix
+checks.${system} = ciLib.mkTestCases {
+  inherit pkgs;
+  namePrefix = "cli-";
+  defaults.command.program = lib.getExe packages.cli;
+  cases = {
+    normal = {
+      command.args = [ "status" ];
+      expect.stdout.contains = "ready";
+    };
+    invalid = {
+      command.args = [ "load" "missing.json" ];
+      expect = {
+        exitCode = { ne = 0; };
+        stderr.contains = "not found";
+      };
+    };
+  };
+};
+```
+
+This yields independent checks named normal and invalid. Common arguments are not implicitly concatenated; a case can override the complete args list. Shared derivation references are reused by Nix rather than rebuilt for each case.
+
 
 ## Validation
 

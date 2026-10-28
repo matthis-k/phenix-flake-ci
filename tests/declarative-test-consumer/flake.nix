@@ -23,6 +23,15 @@
           init)
             printf 'ready' > state.json
             ;;
+          create)
+            printf '{"id":"session-created"}\n'
+            ;;
+          echo-id)
+            printf '{"id":"%s"}\n' "$2"
+            ;;
+          write)
+            printf '{"state":"ready","count":2}\n' > state.json
+            ;;
           inspect)
             if test -f state.json; then
               printf '{"initialized":true}\n'
@@ -68,6 +77,40 @@
             stdout.empty = true;
           };
         };
+        references = ciLib.mkTest {
+          inherit pkgs;
+          name = "cross-step-references";
+          steps = [
+            {
+              id = "create";
+              command = { inherit program; args = [ "create" ]; };
+            }
+            {
+              id = "echo";
+              command = {
+                inherit program;
+                args = [
+                  "echo-id"
+                  { ref = { step = "create"; field = "stdout"; json = "/id"; }; }
+                ];
+              };
+              expect.stdout.json."/id" = {
+                eq = { ref = { step = "create"; field = "stdout"; json = "/id"; }; };
+              };
+            }
+          ];
+        };
+        file-content = ciLib.mkTest {
+          inherit pkgs;
+          name = "file-content";
+          command = { inherit program; args = [ "write" ]; };
+          expect.files."state.json" = {
+            exists = true;
+            text.contains = "ready";
+            json."/count" = { gte = 2; };
+            size = { gt = 10; };
+          };
+        };
         lifecycle = ciLib.mkTest {
           inherit pkgs;
           name = "lifecycle";
@@ -84,7 +127,24 @@
           ];
           expect.files."state.json".exists = true;
         };
-      };
+      } // (ciLib.mkTestCases {
+        inherit pkgs;
+        namePrefix = "case-";
+        defaults.command = { inherit program; };
+        cases = {
+          matrix-status = {
+            command.args = [ "status" ];
+            expect.stdout.json."/status" = "ready";
+          };
+          matrix-invalid = {
+            command.args = [ "invalid" ];
+            expect = {
+              exitCode = 7;
+              stderr.contains = "invalid configuration";
+            };
+          };
+        };
+      });
       # Deliberately failing derivation used solely to prove that failed
       # assertions cause nix build to fail. Not part of the required checks.
       packages.${system}.assertion-fails = ciLib.mkTest {

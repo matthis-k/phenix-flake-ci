@@ -56,6 +56,34 @@ let
     command.program = "/bin/true";
     env.COUNT = 1;
   }) true);
+  mkTestCases = import ./mk-test-cases.nix;
+  matrix = mkTestCases {
+    inherit pkgs;
+    namePrefix = "cli-";
+    defaults = {
+      command.program = "/nix/store/demo/bin/cli";
+      env.LANG = "C";
+      fixtures."input.json" = "{}";
+    };
+    cases = {
+      ready = {
+        command.args = [ "status" ];
+        expect.stdout.contains = "ready";
+      };
+      invalid = {
+        command.args = [ "invalid" ];
+        expect.exitCode = 7;
+        env.MODE = "strict";
+      };
+    };
+  };
+  matrixReady = builtins.fromJSON matrix.ready.attrs.testSpec;
+  matrixInvalid = builtins.fromJSON matrix.invalid.attrs.testSpec;
+  invalidMatrix = builtins.tryEval (builtins.deepSeq (mkTestCases {
+    inherit pkgs;
+    cases = { };
+  }) true);
+
 in
 {
   mkTestCreatesCheckDerivation = 
@@ -82,4 +110,21 @@ in
     assert !invalidNeither.success;
     assert !invalidEnv.success;
     true;
+
+  mkTestCasesGeneratesIndependentChecks =
+    assert builtins.attrNames matrix == [ "invalid" "ready" ];
+    assert matrix.ready.name == "test-cli-ready";
+    assert matrix.invalid.name == "test-cli-invalid";
+    assert matrixReady.command.program == "/nix/store/demo/bin/cli";
+    assert matrixReady.command.args == [ "status" ];
+    assert matrixInvalid.command.args == [ "invalid" ];
+    assert matrixInvalid.env.LANG == "C";
+    assert matrixInvalid.env.MODE == "strict";
+    assert matrixReady.fixtures."input.json" == "{}";
+    true;
+
+  mkTestCasesRejectsEmptyMatrix =
+    assert !invalidMatrix.success;
+    true;
+
 }
