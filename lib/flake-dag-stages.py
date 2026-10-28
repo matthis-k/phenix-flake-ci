@@ -161,7 +161,10 @@ def leaf_command(args):
     if target is None:
         raise ValueError("unplanned leaf shard")
     checks = build_selected(plan, target["checks"])
-    incremental = export_incremental_archive(checks, shared_outputs(args.prebuild), args.archive)
+    excluded = shared_outputs(args.prebuild)
+    if args.built:
+        excluded = sorted(set(excluded + shared_outputs(args.built)))
+    incremental = export_incremental_archive(checks, excluded, args.archive)
     out = evidence(plan, stages, args.shard, checks)
     out["exportedPaths"] = incremental
     save(args.output, out)
@@ -256,6 +259,7 @@ def main():
         elif key == "leaf":
             sub.add_argument("--shard", required=True)
             sub.add_argument("--prebuild", required=True)
+            sub.add_argument("--built", help="Verified build-join output evidence; exclude that closure from test archives")
             sub.add_argument("--archive", required=True)
             sub.add_argument("--output", required=True)
         elif key == "join":
