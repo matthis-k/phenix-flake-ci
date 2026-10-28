@@ -31,6 +31,21 @@ jobs:
       - name: Test declarative assertions and negative cases
         run: python3 lib/test-test-runner.py -v
 
+      - name: Exercise declarative tests as Nix check derivations
+        run: |
+          set -euo pipefail
+          fixture=./tests/declarative-test-consumer
+          nix build --no-write-lock-file --no-link \
+            "$fixture#checks.x86_64-linux.cli" \
+            "$fixture#checks.x86_64-linux.expected-failure" \
+            "$fixture#checks.x86_64-linux.lifecycle"
+          path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#checks.x86_64-linux.cli")"
+          test -s "$path/result.json"
+          if nix build --no-write-lock-file --no-link "$fixture#packages.x86_64-linux.assertion-fails"; then
+            echo "invalid expectation unexpectedly succeeded" >&2
+            exit 1
+          fi
+
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
 
