@@ -82,11 +82,28 @@ def build_plan(plan, graph):
         raise ValueError("duplicate or lost build derivation owner")
     all_closure = set().union(*covered)
     repeated = sum(len(c) for c in covered) - len(all_closure)
+    # Every derivation required by two or more build owners is a single
+    # shared-store prebuild obligation, not independent duplicated work.
+    counts = {node: sum(node in paths for paths in covered) for node in all_closure}
+    common = {node for node, count in counts.items() if count > 1}
+    # Maximal shared nodes cover the entire shared dependency closure.
+    ancestors_of_common = set().union(*(set(closure(n)) - {n} for n in common))
+    shared_frontier = sorted(common - ancestors_of_common)
+    common_closure = set().union(*(set(closure(n)) for n in shared_frontier))
+    if common_closure != common:
+        raise ValueError("shared build frontier failed to cover all cross-owner dependencies")
+    residual = [nodes - common_closure for nodes in covered]
+    residual_overlap = sum(len(nodes) for nodes in residual) - len(set().union(*residual))
+    if residual_overlap:
+        raise ValueError("shared frontier still permits redundant transitive builds")
     result = {
         "schemaVersion": SCHEMA, "commit": plan["commit"],
         "planDigest": plan["digest"], "graphDigest": graph["graphDigest"],
         "stagedDigest": stages["digest"], "workers": workers,
-        "roots": cut, "estimatedOverlapDrvs": repeated,
+        "roots": cut, "commonRoots": shared_frontier,
+        "estimatedOverlapDrvs": repeated,
+        "estimatedOverlapAfterCommon": residual_overlap,
+        "estimatedSharedDrvs": len(common_closure),
         "estimatedUniqueDrvs": len(all_closure),
     }
     result["digest"] = planner.digest(result)
@@ -113,7 +130,10 @@ def plan_cmd(args):
             }) + "\n")
             output.write("build_digest=" + result["digest"] + "\n")
     print(f"Build frontier: {len(result['roots'])} unique roots on {WORKERS} builders; "
-          f"estimated transitive overlap {result['estimatedOverlapDrvs']} derivations")
+          f"{len(result['commonRoots'])} graph-derived common roots protecting "
+          f"{result['estimatedSharedDrvs']} shared derivations; "
+          f"overlap before={result['estimatedOverlapDrvs']}, "
+          f"after={result['estimatedOverlapAfterCommon']}")
 
 def outputs_from_nix(drvs):
     if not drvs:
@@ -123,6 +143,53 @@ def outputs_from_nix(drvs):
          *(node + "^*" for node in sorted(drvs))], text=True)
     return dag.parse_nix_results(json.loads(raw), {str(i): x for i, x in enumerate(drvs)})
 
+def common_cmd(args):
+    plan, graph, staging = validated(args.plan, args.graph, args.build_plan)
+    exact_head(plan)
+    realized = outputs_from_nix(staging["commonRoots"])
+    roots = Path(args.gc_roots_dir)
+    roots.mkdir(parents=True, exist_ok=True)
+    for index, path in enumerate(sorted({p for group in realized.values() for p in group})):
+        subprocess.run(["nix-store", "--realise", "--add-root",
+                        str(roots / f"common-{index:04d}"), path],
+                       stdout=subprocess.DEVNULL, check=True)
+    record = {
+        "schemaVersion": SCHEMA, "role": "common", "commit": plan["commit"],
+        "planDigest": plan["digest"], "graphDigest": graph["graphDigest"],
+        "buildDigest": staging["digest"], "outputs": realized,
+    }
+    save(args.output, record)
+    print(f"Prebuilt {len(realized)} graph-derived common roots; "
+          "GC-protected for the shared cache writer")
+
+def common_outputs(plan, graph, staging, common_file):
+    record = load(common_file)
+    for key, expected in {
+        "schemaVersion": SCHEMA, "role": "common", "commit": plan["commit"],
+        "planDigest": plan["digest"], "graphDigest": graph["graphDigest"],
+        "buildDigest": staging["digest"],
+    }.items():
+        if record.get(key) != expected:
+            raise ValueError("stale or mismatched shared build evidence")
+    mapping = record.get("outputs")
+    if not isinstance(mapping, dict) or set(mapping) != set(staging["commonRoots"]):
+        raise ValueError("missing graph-derived shared build outputs")
+    if any(not isinstance(paths, list) or not paths
+           or any(not planner.STORE.fullmatch(p) for p in paths)
+           for paths in mapping.values()):
+        raise ValueError("invalid graph-derived shared store paths")
+    return sorted({p for paths in mapping.values() for p in paths})
+
+def common_verify_cmd(args):
+    plan, graph, staging = validated(args.plan, args.graph, args.build_plan)
+    exact_head(plan)
+    paths = common_outputs(plan, graph, staging, args.common)
+    if paths:
+        actual = planner.run_command(["nix", "path-info", "--offline", *paths]).splitlines()
+        if set(actual) != set(paths):
+            raise ValueError("common frontier did not restore on this runner")
+    print(f"PASS: {len(paths)} common output paths available before build/test execution")
+
 def worker_cmd(args):
     plan, graph, staging = validated(args.plan, args.graph, args.build_plan)
     exact_head(plan)
@@ -130,7 +197,8 @@ def worker_cmd(args):
     if worker is None:
         raise ValueError("unregistered build worker")
     realized = outputs_from_nix(worker["roots"])
-    shared = staged.shared_outputs(args.prebuild)
+    shared = sorted(set(staged.shared_outputs(args.prebuild)
+                        + common_outputs(plan, graph, staging, args.common)))
     archive = Path(args.archive)
     archive.parent.mkdir(parents=True, exist_ok=True)
     incremental = staged.export_incremental_archive(
@@ -169,6 +237,7 @@ def join_cmd(args):
     files = sorted(Path(args.builders).rglob("evidence.json"))
     if len(files) != WORKERS:
         raise ValueError("missing one of four builder evidences")
+    common = common_outputs(plan, graph, staging, args.common)
     seen, outputs, archive_paths = set(), {}, []
     for path in files:
         item = load(path)
@@ -197,7 +266,7 @@ def join_cmd(args):
             raise ValueError("missing pure-build closure after join")
     extra = staged.export_incremental_archive(
         {drv: {"outputs": paths} for drv, paths in outputs.items()},
-        staged.shared_outputs(args.prebuild), args.archive)
+        sorted(set(staged.shared_outputs(args.prebuild) + common)), args.archive)
     report = {
         "schemaVersion": SCHEMA, "role": "build-join", "commit": plan["commit"],
         "planDigest": plan["digest"], "graphDigest": graph["graphDigest"],
@@ -212,6 +281,13 @@ def join_cmd(args):
 def install_cmd(args):
     plan, graph, staging = validated(args.plan, args.graph, args.build_plan)
     exact_head(plan)
+    # Joined builder archives deliberately omit already shared paths.
+    # Their complete closures are required locally before any imports.
+    shared = common_outputs(plan, graph, staging, args.common)
+    if shared:
+        actual = planner.run_command(["nix", "path-info", "--offline", *shared]).splitlines()
+        if set(actual) != set(shared):
+            raise ValueError("shared build frontier not restored to test runner")
     evidence = load(args.evidence)
     if any(evidence.get(k) != v for k, v in {
         "schemaVersion": SCHEMA, "role": "build-join", "commit": plan["commit"],
@@ -236,7 +312,8 @@ def install_cmd(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="operation", required=True)
-    for name, handler in (("plan", plan_cmd), ("worker", worker_cmd),
+    for name, handler in (("plan", plan_cmd), ("common", common_cmd),
+                          ("common-verify", common_verify_cmd), ("worker", worker_cmd),
                           ("join", join_cmd), ("install", install_cmd)):
         cmd = subs.add_parser(name)
         cmd.set_defaults(handler=handler)
@@ -245,18 +322,26 @@ def main():
         cmd.add_argument("--build-plan")
         if name == "plan":
             cmd.add_argument("--output", required=True)
+        elif name == "common":
+            cmd.add_argument("--output", required=True)
+            cmd.add_argument("--gc-roots-dir", required=True)
+        elif name == "common-verify":
+            cmd.add_argument("--common", required=True)
         elif name == "worker":
             cmd.add_argument("--worker", required=True)
             cmd.add_argument("--prebuild", required=True)
+            cmd.add_argument("--common", required=True)
             cmd.add_argument("--archive", required=True)
             cmd.add_argument("--output", required=True)
         elif name == "join":
             cmd.add_argument("--builders", required=True)
             cmd.add_argument("--prebuild", required=True)
+            cmd.add_argument("--common", required=True)
             cmd.add_argument("--archive", required=True)
             cmd.add_argument("--output", required=True)
         else:
             cmd.add_argument("--evidence", required=True)
+            cmd.add_argument("--common", required=True)
             cmd.add_argument("--archive", required=True)
     args = parser.parse_args()
     try:
