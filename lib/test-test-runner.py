@@ -185,6 +185,41 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(evidence["status"], "pass")
 
 
+    def test_json_equality_mismatch_includes_diff(self):
+        spec = {"command": self.command("print('{\"status\":\"initializing\",\"count\":1}')"),
+                "expect": {"stdout": {"json": {"": {
+                    "eq": {"status": "ready", "count": 2}}}}}}
+        result = runner.test(spec)
+        self.assertEqual(result["status"], "fail")
+        failed = result["failures"][0]
+        self.assertIn("--- expected", failed["diff"])
+        self.assertIn("+++ actual", failed["diff"])
+        self.assertIn("-  \"status\": \"ready\"", failed["diff"])
+        self.assertIn("+  \"status\": \"initializing\"", failed["diff"])
+
+    def test_text_equality_mismatch_includes_diff(self):
+        result = runner.test({"command": self.command("print('actual')"),
+                              "expect": {"stdout": {"eq": "expected\\n"}}})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("-expected", result["failures"][0]["diff"])
+        self.assertIn("+actual", result["failures"][0]["diff"])
+
+    def test_multiple_missing_artifacts_are_all_reported(self):
+        result = runner.test({"command": self.command("pass"),
+                              "expect": {"files": {"first.json": {"exists": True},
+                                                   "second.json": {"exists": True},
+                                                   "third.log": {"exists": False}}}})
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(len(result["failures"]), 2)
+        self.assertEqual({x["assertion"] for x in result["failures"]},
+                         {"main.files.first.json.exists", "main.files.second.json.exists"})
+
+    def test_diff_has_bounded_log_lines(self):
+        actual = {"eq": "\\n".join(f"expected-{i}" for i in range(500))}
+        diff = runner.render_diff(actual, "\\n".join(f"actual-{i}" for i in range(500)))
+        self.assertIsNotNone(diff)
+        self.assertLessEqual(len(diff.splitlines()), 81)
+
 
 if __name__ == "__main__":
     unittest.main()
