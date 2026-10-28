@@ -34,9 +34,8 @@ let
     builtins.isString repository
     && builtins.match "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" repository != null;
   safeBranch = branch:
-    safePath branch
-    && branch != ""
-    && builtins.match ".*[.*?!\\[\\]{}].*" branch == null;
+    builtins.isString branch
+    && builtins.match "[A-Za-z0-9_]+([./-][A-Za-z0-9_]+)*" branch != null;
   admissionBranches = if admission == null then [ ] else admission.branches or [ ];
   admissionLines =
     if admission == null then [ ] else
