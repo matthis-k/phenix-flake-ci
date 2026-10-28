@@ -129,10 +129,19 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
             --plan ci-plan/plan.json --output ci-plan/prebuild.json \
             --gc-roots-dir "${RUNNER_TEMP}/phenix-shared-prebuild-roots"
+      - name: Prebuild graph-derived shared compilation frontier once
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py common \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json \
+            --gc-roots-dir "${RUNNER_TEMP}/phenix-common-roots" \
+            --output ci-plan/common.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nix-dag-shared
-          path: ci-plan/prebuild.json
+          path: |
+            ci-plan/prebuild.json
+            ci-plan/common.json
           if-no-files-found: error
 
   build:
@@ -175,6 +184,11 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
             --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+      - name: Verify graph-derived common outputs before compiling
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py common-verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json --common ci-plan/common.json
       - name: Compile assigned pure-build Nix derivations
         env:
           OWNER: ${{ matrix.id }}
@@ -182,7 +196,7 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-build-test.py worker \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --build-plan ci-plan/build.json --worker "$OWNER" \
-            --prebuild ci-plan/prebuild.json \
+            --prebuild ci-plan/prebuild.json --common ci-plan/common.json \
             --archive compiled/store.nar --output compiled/evidence.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -242,10 +256,13 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
             --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py common-verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json --common ci-plan/common.json
           python3 .ci-tools/flake-ci/lib/flake-build-test.py join \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --build-plan ci-plan/build.json --builders built-shards \
-            --prebuild ci-plan/prebuild.json \
+            --prebuild ci-plan/prebuild.json --common ci-plan/common.json \
             --archive build-joined/store.nar --output build-joined/evidence.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -299,7 +316,7 @@ jobs:
             --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
           python3 .ci-tools/flake-ci/lib/flake-build-test.py install \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
-            --build-plan ci-plan/build.json \
+            --build-plan ci-plan/build.json --common ci-plan/common.json \
             --evidence build-joined/evidence.json --archive build-joined/store.nar
       - name: Execute only ready Nix checks after build join
         env:
@@ -376,7 +393,7 @@ jobs:
             --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
           python3 .ci-tools/flake-ci/lib/flake-build-test.py install \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
-            --build-plan ci-plan/build.json \
+            --build-plan ci-plan/build.json --common ci-plan/common.json \
             --evidence build-joined/evidence.json --archive build-joined/store.nar
       - name: Import completed test outputs and build dependent shipping roots
         run: |
