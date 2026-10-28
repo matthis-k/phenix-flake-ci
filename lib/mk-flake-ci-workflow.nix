@@ -6,6 +6,8 @@
   libraryRef,
   name ? "Flake CI",
   events ? { },
+  admission ? null,
+  untrustedExclusion ? null,
 }:
 let
   fail = message: throw "phenix-flake-ci: ${message}";
@@ -26,6 +28,57 @@ let
   pushBranches = events.pushBranches or [ "main" ];
   workflowDispatch = events.workflowDispatch or true;
   remoteSelected = backend == "nix-remote";
+  # Optional typed admission guard for a generated trusted push workflow.
+  # This checks manual dispatch refs too; raw GitHub expressions are never
+  # accepted from the consumer.
+  safeRepository = repository:
+    builtins.isString repository
+    && builtins.match "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" repository != null;
+  safeBranch = branch:
+    builtins.isString branch
+    && builtins.match "[A-Za-z0-9_]+([./-][A-Za-z0-9_]+)*" branch != null;
+  admissionBranches = if admission == null then [ ] else admission.branches or [ ];
+  admissionAuthors = if admission == null then [ ] else admission.pullRequestAuthors or [ ];
+  exclusionAuthors = if untrustedExclusion == null then [ ] else untrustedExclusion.authors or [ ];
+  safeAuthor = author:
+    builtins.isString author
+    && builtins.match "[A-Za-z0-9]+(-[A-Za-z0-9]+)*" author != null
+    && builtins.stringLength author <= 39;
+  unique = authors:
+    builtins.length authors == builtins.length (builtins.attrNames (
+      builtins.listToAttrs (map (author: { name = author; value = true; }) authors)
+    ));
+  # Both callers share this exact identity expression. A fork never qualifies:
+  # author identity alone does not grant access to trusted Nix workers.
+  prIdentity = repository: authors:
+    "github.repository == '${repository}'"
+    + " && github.event.pull_request.head.repo.full_name == '${repository}'"
+    + " && (" + builtins.concatStringsSep " || " (
+      map (author: "github.event.pull_request.user.login == '${author}'") authors
+    ) + ")";
+  admissionLines =
+    if admission == null then [ ] else
+    let
+      branches = builtins.concatStringsSep " || " (
+        map (branch: "github.ref == 'refs/heads/${branch}'") admissionBranches
+      );
+      pushPredicate =
+        "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
+        + " && (${branches})";
+      predicate =
+        if admissionAuthors == [ ] then
+          "github.repository == '${admission.repository}' && " + pushPredicate
+        else
+          "github.repository == '${admission.repository}'"
+          + " && ((" + pushPredicate + ")"
+          + " || (github.event_name == 'pull_request' && ("
+          + prIdentity admission.repository admissionAuthors + ")))";
+    in
+    [ ("    if: " + "$" + "{{ " + predicate + " }}") ];
+  exclusionLines =
+    if untrustedExclusion == null || exclusionAuthors == [ ] then [ ] else
+    [ ("    if: " + "$" + "{{ github.event_name == 'pull_request' && !("
+      + prIdentity untrustedExclusion.repository exclusionAuthors + ") }}") ];
   workflowFile = {
     matrix = "flake-checks.yml";
     nix-dag = "flake-dag-staged.yml";
@@ -62,8 +115,35 @@ let
       fail "pushBranches must be repository branch names"
     else if !(pullRequest || workflowDispatch || pushBranches != [ ]) then
       fail "at least one workflow event must be enabled"
-    else if remoteSelected && pullRequest then
-      fail "untrusted pull_request triggers are forbidden for Tailscale builders"
+    else if remoteSelected && pullRequest && admissionAuthors == [ ] then
+      fail "remote pull_request requires an explicit approved-author admission"
+    else if admission != null && (!remoteSelected || !isAttrs admission
+      || !keysWithin admission [ "repository" "branches" "pullRequestAuthors" ]) then
+      fail "typed admission is only supported for trusted remote CI"
+    else if admission != null && (!builtins.isList admissionAuthors
+      || !(builtins.all safeAuthor admissionAuthors)
+      || !unique admissionAuthors
+      || (admissionAuthors != [ ] && !pullRequest)) then
+      fail "trusted PR author allowlist must contain unique GitHub logins and a PR trigger"
+    else if untrustedExclusion != null && (remoteSelected || !pullRequest
+      || !isAttrs untrustedExclusion
+      || !keysWithin untrustedExclusion [ "repository" "authors" ]
+      || !safeRepository (untrustedExclusion.repository or null)
+      || !builtins.isList exclusionAuthors
+      || !(builtins.all safeAuthor exclusionAuthors)
+      || !unique exclusionAuthors) then
+      fail "PR exclusion requires a valid typed repository and author allowlist"
+    else if admission != null && !safeRepository (admission.repository or null) then
+      fail "admission.repository must be an exact GitHub owner/repo"
+    else if admission != null && (!builtins.isList admissionBranches
+      || admissionBranches == [ ] || !(builtins.all safeBranch admissionBranches)
+      || admissionBranches != pushBranches
+      || builtins.length admissionBranches != builtins.length (
+        builtins.attrNames (builtins.listToAttrs (
+          map (branch: { name = branch; value = true; }) admissionBranches
+        ))
+      )) then
+      fail "admission requires exact, nonempty branches matching pushBranches"
     else
       true;
   eventLines =
@@ -95,15 +175,32 @@ let
       "    secrets:"
       (secret "TS_AUTHKEY")
     ];
+  # All PR events for one PR share a workflow-level cancellation key,
+  # regardless of which commit or base branch triggered the rerun. A run
+  # replaces an older in-flight run rather than launching another four-worker
+  # cluster. Push/dispatch events use their unique run_id so protected-branch
+  # builds are never implicitly serialized or canceled.
+  concurrencyLines =
+    if !pullRequest then [ ] else [
+      ""
+      "concurrency:"
+      ("  group: " + "$" + "{{ github.workflow }}-" + "$" + "{{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}")
+      ("  cancel-in-progress: " + "$" + "{{ github.event_name == 'pull_request' }}")
+    ];
   lines =
     [ "name: ${builtins.toJSON name}" "on:" ]
     ++ eventLines
+    ++ concurrencyLines
     ++ [ "" "permissions:" "  contents: read" ]
     ++ (if remoteSelected then [ "  id-token: write" ] else [ ])
     ++ [
       ""
       "jobs:"
       "  flake-checks:"
+    ]
+    ++ admissionLines
+    ++ exclusionLines
+    ++ [
       "    uses: matthis-k/phenix-flake-ci/.github/workflows/${workflowFile}@${libraryRef}"
       "    with:"
     ]

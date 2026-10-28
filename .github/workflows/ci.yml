@@ -28,6 +28,29 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
+      - name: Test declarative assertions and negative cases
+        run: python3 lib/test-test-runner.py -v
+
+      - name: Exercise declarative tests as Nix check derivations
+        run: |
+          set -euo pipefail
+          fixture=./tests/declarative-test-consumer
+          nix build --no-write-lock-file --no-link \
+            "$fixture#checks.x86_64-linux.cli" \
+            "$fixture#checks.x86_64-linux.expected-failure" \
+            "$fixture#checks.x86_64-linux.lifecycle" \
+            "$fixture#checks.x86_64-linux.references" \
+            "$fixture#checks.x86_64-linux.file-content" \
+            "$fixture#checks.x86_64-linux.matrix-status" \
+            "$fixture#checks.x86_64-linux.matrix-invalid" \
+            "$fixture#checks.x86_64-linux.multi-artifact"
+          path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#checks.x86_64-linux.cli")"
+          test -s "$path/result.json"
+          if nix build --no-write-lock-file --no-link "$fixture#packages.x86_64-linux.assertion-fails"; then
+            echo "invalid expectation unexpectedly succeeded" >&2
+            exit 1
+          fi
+
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
 
@@ -48,6 +71,21 @@ jobs:
 
       - name: Verify shared cache retention and read-only shards
         run: python3 lib/test-cache-retention-workflows.py -v
+
+      - name: Test generic executable test package discovery and evidence
+        run: python3 lib/test-flake-test-packages.py -v
+
+      - name: Test Cargo precompiled executable packaging
+        run: python3 lib/test-cargo-test-artifacts.py -v
+
+      - name: Build and execute Cargo fixture after artifact compilation
+        run: |
+          test_package="$(nix build --no-write-lock-file --no-link --print-out-paths ./tests/cargo-test-consumer)"
+          nix run --no-write-lock-file ./tests/cargo-test-consumer
+          nix run --no-write-lock-file './tests/cargo-test-consumer#packages.x86_64-linux."test.cargo-generic-cargo-test-fixture"'
+          nix run --no-write-lock-file './tests/cargo-test-consumer#packages.x86_64-linux."test.cargo-generic-cargo-child"'
+          test -s "$test_package/cargo-tests.json"
+          test -d "$test_package/libexec"
 
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v

@@ -3,6 +3,12 @@ let
   mkCi = import ./mk-ci.nix;
   mkFlakeCheckConfig = import ./mk-flake-check-config.nix;
   mkFlakeCiWorkflow = import ./mk-flake-ci-workflow.nix;
+  mkFlakeCiWorkflows = import ./mk-flake-ci-workflows.nix;
+  mkCargoTestPackage = import ./mk-cargo-test-package.nix;
+  mkTest = import ./mk-test.nix;
+  testAssert = import ./test-assert.nix;
+  mkTestCases = import ./mk-test-cases.nix;
+  mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
@@ -100,13 +106,19 @@ let
 in
 {
   version = "0.14.0";
-  tests = (import ./tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix);
+  tests = (import ./tests.nix) // (import ./test-api-tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix) // (import ./flake-ci-workflows-tests.nix);
   inherit
     ciSchemaVersion
     maintenanceCommandGraph
     mkCi
+    mkTest
+    testAssert
+    mkTestCases
     mkFlakeCheckConfig
     mkFlakeCiWorkflow
+    mkFlakeCiWorkflows
+    mkCargoTestPackage
+    mkCargoTestPackages
     rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs

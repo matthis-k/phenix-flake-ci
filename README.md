@@ -4,6 +4,12 @@
 
 `mkCi` defines semantic CI suites. `mkMaintenance` remains the generic command graph for repository-specific validation, fixes, and hooks.
 
+## Declarative executable tests
+
+Use `ciLib.mkTest` to create a regular Nix `checks.<system>` derivation from a command and its assertions. One process execution can verify exit status, stdout, stderr, JSON fields, and filesystem outcomes. Multiple steps share an isolated workspace. Expected nonzero exits are first-class negative tests.
+
+See [Declarative tests](docs/declarative-tests.md) for the API, assertion operations, and examples. These checks are discovered by the existing flake planner; no separate workflow test registry is required.
+
 ## Semantic phases
 
 `mkCi` classifies suites with five phase names:

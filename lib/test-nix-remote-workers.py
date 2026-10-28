@@ -111,7 +111,7 @@ class RemoteBuildersTest(unittest.TestCase):
         # refuses duplicate names, including across sequential 2/4/8 calls.
         workflow = (Path(__file__).parent.parent / ".github/workflows/flake-nix-builders.yml").read_text()
         self.assertEqual(
-            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 3
+            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 4
         )
         self.assertEqual(
             workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}"), 2
@@ -130,14 +130,31 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn('artifact_namespace: { type: string, default: "" }', workflow)
         self.assertIn("inputs.cache_namespace", workflow)
         self.assertIn("inputs.artifact_namespace", workflow)
-        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 3)
+        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 4)
         self.assertEqual(workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}${{"), 2)
-        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
         self.assertIn("restore-prefixes-first-match:", coordinator)
         # The namespace appears in both the primary and restore prefix.
         self.assertGreaterEqual(coordinator.count("inputs.cache_namespace"), 2)
         self.assertIn("github.sha", coordinator)
         self.assertIn("gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}", coordinator)
+
+    def test_runnable_jobs_only_start_after_native_coordinator(self):
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        test_stage = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        acceptance = workflow.split("  acceptance:\n", 1)[1]
+        self.assertIn("needs: [plan, coordinator]", test_stage)
+        self.assertIn("needs.coordinator.result == 'success'", test_stage)
+        self.assertIn("fromJSON(needs.plan.outputs.test_matrix)", test_stage)
+        self.assertIn("save: false", test_stage)
+        self.assertNotIn("TS_AUTHKEY:", test_stage)
+        self.assertNotIn("TS_OAUTH_CLIENT_ID:", test_stage)
+        self.assertIn("flake-test-packages.py run", test_stage)
+        self.assertIn("needs: [plan, worker, coordinator, test]", acceptance)
+        self.assertIn("flake-test-packages.py verify", acceptance)
+        self.assertIn("test \"$TESTS\" = success", acceptance)
+        self.assertIn("test \"$TESTS\" = skipped", acceptance)
 
     def test_remote_coordinator_has_trusted_cross_run_nix_cache(self):
         """A second full run should actually reuse Nix output paths.
@@ -149,7 +166,7 @@ class RemoteBuildersTest(unittest.TestCase):
                     ".github/workflows/flake-nix-builders.yml").read_text()
         plan = workflow.split("  plan:\n", 1)[1].split("  worker:\n", 1)[0]
         worker = workflow.split("  worker:\n", 1)[1].split("  coordinator:\n", 1)[0]
-        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
         self.assertIn("cache_prefix: ${{ steps.plan.outputs.cache_prefix }}", plan)
         self.assertIn("cache_prefix=", plan)
         self.assertIn("cachePrefix", plan)
@@ -161,7 +178,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertLess(coordinator.index("Restore and save trusted remote Nix store"),
                         coordinator.index("Native Nix scheduler executes all exact-head checks"))
         self.assertNotIn("cache-nix-action", worker)
-        self.assertIn("name: Require all builders and exact-head shipping evidence", workflow)
+        self.assertIn("name: Require all builders, runnable tests and exact-head shipping evidence", workflow)
 
 
 if __name__ == "__main__":
