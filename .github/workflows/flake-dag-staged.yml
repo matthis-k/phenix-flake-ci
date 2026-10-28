@@ -104,11 +104,16 @@ jobs:
         with:
           name: nix-dag-plan
           path: ci-plan
-      - name: Restore and publish shared Nix store
+      # Read-only restore from the verified, trusted-main four-builder cache.
+      # This happens only in the shared writer: leaf/join jobs must restore
+      # the exact-head PR prebuild cache instead. Keep the PR primary key
+      # distinct from remote-* to prohibit publishing to the trusted namespace.
+      - name: Restore trusted-main Nix store and publish PR-only shared prebuild
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
           primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
           restore-prefixes-first-match: |
+            remote-${{ needs.plan.outputs.cache_prefix }}-
             ${{ needs.plan.outputs.cache_prefix }}-
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Build compatible shared artifacts concurrently
