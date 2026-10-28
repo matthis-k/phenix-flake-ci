@@ -49,6 +49,16 @@ jobs:
       - name: Test generic executable test package discovery and evidence
         run: python3 lib/test-flake-test-packages.py -v
 
+      - name: Test Cargo precompiled executable packaging
+        run: python3 lib/test-cargo-test-artifacts.py -v
+
+      - name: Build and execute Cargo fixture after artifact compilation
+        run: |
+          test_package="$(nix build --no-write-lock-file --no-link --print-out-paths ./tests/cargo-test-consumer)"
+          nix run --no-write-lock-file ./tests/cargo-test-consumer
+          test -s "$test_package/cargo-tests.json"
+          test -d "$test_package/libexec"
+
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
 
