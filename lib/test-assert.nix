@@ -28,5 +28,7 @@ rec {
     text = path: expectations: fileAssertion path { text = expectations; };
     json = path: assertions: fileAssertion path { json = assertions; };
     size = path: expected: fileAssertion path { size = expected; };
+    required = paths: builtins.listToAttrs (map (path: { name = path; value = { exists = true; }; }) paths);
+    absent = paths: builtins.listToAttrs (map (path: { name = path; value = { exists = false; }; }) paths);
   };
 }
