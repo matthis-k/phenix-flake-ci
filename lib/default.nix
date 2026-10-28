@@ -4,6 +4,7 @@ let
   mkFlakeCheckConfig = import ./mk-flake-check-config.nix;
   mkFlakeCiWorkflow = import ./mk-flake-ci-workflow.nix;
   mkFlakeCiWorkflows = import ./mk-flake-ci-workflows.nix;
+  mkCargoTestPackage = import ./mk-cargo-test-package.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
@@ -109,6 +110,7 @@ in
     mkFlakeCheckConfig
     mkFlakeCiWorkflow
     mkFlakeCiWorkflows
+    mkCargoTestPackage
     rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs

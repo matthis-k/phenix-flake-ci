@@ -108,3 +108,35 @@ separately. Move old test work into runnable packages only once exact-head
 shipping parity is demonstrated. The coordinator's GitHub Actions Nix
 cache has a finite retention size; a missing test closure fails closed.
 A dedicated binary cache can remove this operational limitation.
+
+## Optional Cargo test artifacts (language-specific adapter)
+
+The core CI scheduler remains language-agnostic. For a Rust workspace, the
+opt-in helper compiles Cargo's test executables **without executing them** and
+exports one ordinary `test.*` package:
+
+```nix
+packages.${system}."test.cargo-workspace" = flakeCi.mkCargoTestPackage {
+  inherit pkgs;
+  src = pkgs.lib.cleanSource ./.;
+  lockFile = ./Cargo.lock;
+  # cargoArgs = [ "--workspace" "--all-targets" ]; # defaults
+};
+```
+
+The native coordinator builds that derivation only once. Afterward, the
+automatically generated test job executes the precompiled test binaries
+against the *immutable source-store tree* using the already-restored Nix
+closure; it never runs Cargo. This preserves Rust tests that use
+`env!("CARGO_MANIFEST_DIR")` to locate fixture files.
+
+The helper is opt-in while migrating existing `checks`. It is deliberately
+one build artifact and one runnable test package per declared Cargo test
+group, so consumers can split workspaces into targeted source/dependency
+groups without requiring the generic CI library to parse their domain model.
+
+Do not switch existing test checks off until both paths have passed on the
+same exact source revision. A whole-workspace Cargo test group will still be
+invalidated by any change to its selected source tree, even if most crates
+are unchanged; consumers wanting narrower incremental builds should
+declare narrower groups.
