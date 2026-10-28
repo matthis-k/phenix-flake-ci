@@ -61,7 +61,7 @@ in
   mkTestCreatesCheckDerivation = 
     assert simple.name == "test-cli-contract";
     assert simple.attrs.passAsFile == [ "testSpec" ];
-    assert builtins.match ".*test-runner.py.*" simple.script != null;
+    assert builtins.match ".*test-runner.py.*" (builtins.replaceStrings [ "\n" ] [ "" ] simple.script) != null;
     true;
 
   mkTestKeepsMultipleAssertionsOnOneCommand =
