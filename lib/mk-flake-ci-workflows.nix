@@ -5,12 +5,15 @@
   configPath,
   libraryRef,
   name ? "Flake CI",
+  names ? { },
 }:
 let
   mk = import ./mk-flake-ci-workflow.nix;
   isAttrs = builtins.isAttrs;
   keysWithin = attrs: allowed: builtins.all (key: builtins.elem key allowed) (builtins.attrNames attrs);
   fail = message: throw "phenix-flake-ci: ${message}";
+  trustedName = names.trusted or "${name} (trusted Nix)";
+  prName = names.pullRequest or "${name} (pull request)";
   trusted = ci.trusted or { };
   pr = ci.pullRequest or { };
   repository = trusted.repository or null;
@@ -19,7 +22,11 @@ let
   remote = trusted.remote or { };
   prBackend = pr.backend or "nix-dag";
   valid =
-    if !isAttrs ci || !keysWithin ci [ "trusted" "pullRequest" ] then
+    if !isAttrs names || !keysWithin names [ "trusted" "pullRequest" ]
+      || !builtins.isString trustedName || trustedName == ""
+      || !builtins.isString prName || prName == "" then
+      fail "names may only override nonempty trusted and pullRequest names"
+    else if !isAttrs ci || !keysWithin ci [ "trusted" "pullRequest" ] then
       fail "CI policy must define only trusted and pullRequest"
     else if !isAttrs trusted || !keysWithin trusted
       [ "repository" "branches" "backend" "remote" "workflowDispatch" ] then
@@ -40,7 +47,7 @@ assert valid;
   trusted = mk {
     ci = { backend = "nix-remote"; inherit remote; };
     inherit configPath libraryRef;
-    name = "${name} (trusted Nix)";
+    name = trustedName;
     events = {
       pullRequest = false;
       pushBranches = branches;
@@ -52,7 +59,7 @@ assert valid;
   pullRequest = mk {
     ci = { backend = prBackend; };
     inherit configPath libraryRef;
-    name = "${name} (pull request)";
+    name = prName;
     events = {
       pullRequest = true;
       pushBranches = [ ];
