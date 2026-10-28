@@ -28,6 +28,9 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
+      - name: Test declarative assertions and negative cases
+        run: python3 lib/test-test-runner.py -v
+
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
 
