@@ -56,6 +56,21 @@ let
     command.program = "/bin/true";
     env.COUNT = 1;
   }) true);
+  testAssert = import ./test-assert.nix;
+  helperTest = mkTest {
+    inherit pkgs;
+    name = "artifacts";
+    command.program = "/bin/true";
+    expect = {
+      stdout.json."/status" = testAssert.eq "ready";
+      exitCode = testAssert.eq 0;
+      files =
+        (testAssert.files.required [ "one.json" "two.json" ])
+        // (testAssert.files.json "three.json" { "/count" = testAssert.gte 3; });
+    };
+  };
+  helperSpec = builtins.fromJSON helperTest.attrs.testSpec;
+  refTest = testAssert.stdoutJson "create" "/id";
   mkTestCases = import ./mk-test-cases.nix;
   matrix = mkTestCases {
     inherit pkgs;
@@ -125,6 +140,16 @@ in
 
   mkTestCasesRejectsEmptyMatrix =
     assert !invalidMatrix.success;
+    true;
+
+  testAssertHelpersProduceOnlyExistingIR =
+    assert helperSpec.expect.stdout.json."/status" == { eq = "ready"; };
+    assert helperSpec.expect.exitCode == { eq = 0; };
+    assert helperSpec.expect.files."one.json".exists;
+    assert helperSpec.expect.files."two.json".exists;
+    assert helperSpec.expect.files."three.json".json."/count".gte == 3;
+    assert refTest == { ref = { step = "create"; field = "stdout"; json = "/id"; }; };
+    assert testAssert.files.absent [ "debug.log" ] == { "debug.log".exists = false; };
     true;
 
 }
