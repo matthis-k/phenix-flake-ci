@@ -1,0 +1,397 @@
+# Opt-in candidate: 4 build owners, verified build closure join, then
+# independent exact-head Nix checks fan out, followed by dependent acceptance.
+# No trusted secret, Tailscale, remote-builder authority or reduced check list.
+name: Four Nix builders then parallel test DAG
+on:
+  workflow_call:
+    inputs:
+      config:
+        type: string
+        required: true
+      library_ref:
+        type: string
+        required: true
+      cache_max_store_size_linux:
+        type: string
+        default: "6G"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-dag-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Generate and cache exact-head Nix dependency DAG
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.stages.outputs.matrix }}
+      builders: ${{ steps.buildcut.outputs.builders }}
+      digest: ${{ steps.plan.outputs.digest }}
+      cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve all exact-head Nix checks
+        id: plan
+        env:
+          CONFIG_FILE: ${{ inputs.config }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-plan
+          nix eval --json --file "$CONFIG_FILE" > ci-plan/config.json
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py plan \
+            --config ci-plan/config.json --output ci-plan/plan.json
+      - name: Restore identical evaluated DAG
+        id: cached_dag
+        uses: actions/cache/restore@v4
+        with:
+          path: ci-plan/graph.json
+          key: nix-derivation-dag-${{ runner.os }}-${{ inputs.library_ref }}-${{ steps.plan.outputs.digest }}
+      - name: Generate dependency graph from Nix only on cache miss
+        if: steps.cached_dag.outputs.cache-hit != 'true'
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
+            --plan ci-plan/plan.json --output ci-plan/graph.json
+      - name: Cache immutable evaluated DAG
+        if: steps.cached_dag.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ci-plan/graph.json
+          key: nix-derivation-dag-${{ runner.os }}-${{ inputs.library_ref }}-${{ steps.plan.outputs.digest }}
+      - name: Generate ready-check fan-out and final dependent checks
+        id: stages
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py plan \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --output ci-plan/stages.json
+      - name: Partition pure build inputs into exactly four owners
+        id: buildcut
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py plan \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --output ci-plan/build.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan/
+          if-no-files-found: error
+
+  shared:
+    name: Shared expensive derivation frontier
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      # Read-only restore from the verified, trusted-main four-builder cache.
+      # This happens only in the shared writer: leaf/join jobs must restore
+      # the exact-head PR prebuild cache instead. Keep the PR primary key
+      # distinct from remote-* to prohibit publishing to the trusted namespace.
+      - name: Restore trusted-main Nix store and publish PR-only shared prebuild
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            remote-${{ needs.plan.outputs.cache_prefix }}-
+            ${{ needs.plan.outputs.cache_prefix }}-
+          gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
+      - name: Build compatible shared artifacts concurrently
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
+            --plan ci-plan/plan.json --output ci-plan/prebuild.json \
+            --gc-roots-dir "${RUNNER_TEMP}/phenix-shared-prebuild-roots"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan/prebuild.json
+          if-no-files-found: error
+
+  build:
+    name: Nix pure-build owner ${{ matrix.id }}
+    needs: [plan, shared]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.builders) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan
+      - name: Restore exact-head shared Nix closure read-only
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - name: Verify shared closure; forbid silent shared recompilation
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
+            --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+      - name: Compile assigned pure-build Nix derivations
+        env:
+          OWNER: ${{ matrix.id }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py worker \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json --worker "$OWNER" \
+            --prebuild ci-plan/prebuild.json \
+            --archive compiled/store.nar --output compiled/evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: compiled-${{ matrix.id }}
+          path: compiled/
+          if-no-files-found: error
+
+  join-builds:
+    name: Join all four compiled Nix closures before testing
+    if: always()
+    needs: [plan, shared, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require complete build frontier
+        env:
+          PLAN: ${{ needs.plan.result }}
+          SHARED: ${{ needs.shared.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          test "$PLAN" = success
+          test "$SHARED" = success
+          test "$BUILD" = success
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: compiled-build-*
+          path: built-shards
+      - name: Restore shared base for lossless Nix import
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - name: Verify and join four build owners
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
+            --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py join \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json --builders built-shards \
+            --prebuild ci-plan/prebuild.json \
+            --archive build-joined/store.nar --output build-joined/evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compiled-joined
+          path: build-joined/
+          if-no-files-found: error
+
+  test:
+    name: Ready tests ${{ matrix.id }}
+    needs: [plan, shared, join-builds]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan
+      - name: Restore shared Nix cache read-only
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: compiled-joined
+          path: build-joined
+      - name: Import compiled closure and verify before running tests
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
+            --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py install \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json \
+            --evidence build-joined/evidence.json --archive build-joined/store.nar
+      - name: Execute only ready Nix checks after build join
+        env:
+          SHARD: ${{ matrix.id }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py leaf \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --stages ci-plan/stages.json --shard "$SHARD" \
+            --prebuild ci-plan/prebuild.json --built build-joined/evidence.json \
+            --archive "dag-leaf/store.nar" --output "dag-leaf/evidence.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: tested-leaf-${{ matrix.id }}
+          path: dag-leaf/
+          if-no-files-found: error
+
+  verify:
+    name: Verify all tests and dependent shipping checks
+    if: always()
+    needs: [plan, shared, join-builds, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful DAG predecessors
+        env:
+          PLAN_STATUS: ${{ needs.plan.result }}
+          SHARED_STATUS: ${{ needs.shared.result }}
+          LEAF_STATUS: ${{ needs.test.result }}
+          BUILD_JOIN_STATUS: ${{ needs.join-builds.result }}
+        run: |
+          test "$PLAN_STATUS" = success
+          test "$SHARED_STATUS" = success
+          test "$LEAF_STATUS" = success
+          test "$BUILD_JOIN_STATUS" = success
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-shared
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: tested-leaf-*
+          path: dag-leaves
+      - name: Restore shared base Nix cache
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: compiled-joined
+          path: build-joined
+      - name: Import compiled closure before dependent tests
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
+            --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
+          python3 .ci-tools/flake-ci/lib/flake-build-test.py install \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --build-plan ci-plan/build.json \
+            --evidence build-joined/evidence.json --archive build-joined/store.nar
+      - name: Import completed test outputs and build dependent shipping roots
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py join \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --stages ci-plan/stages.json --leaves dag-leaves \
+            --output dag-final/evidence.json
+      - name: Exact-head DAG evidence gate
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-dag-stages.py verify \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --stages ci-plan/stages.json --evidence dag-final/evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: nix-dag-final-evidence
+          path: dag-final/evidence.json
+          if-no-files-found: error

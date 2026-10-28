@@ -40,6 +40,9 @@ jobs:
       - name: Test untrusted single-store Nix DAG workflow boundaries
         run: python3 lib/test-local-dag-workflow.py -v
 
+      - name: Test pure-build frontier and four-builder ownership
+        run: python3 lib/test-flake-build-test.py -v
+
       - name: Test generated DAG stages and store transfers
         run: python3 lib/test-flake-dag-stages.py -v
 
