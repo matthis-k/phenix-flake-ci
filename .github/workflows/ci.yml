@@ -56,6 +56,8 @@ jobs:
         run: |
           test_package="$(nix build --no-write-lock-file --no-link --print-out-paths ./tests/cargo-test-consumer)"
           nix run --no-write-lock-file ./tests/cargo-test-consumer
+          nix run --no-write-lock-file './tests/cargo-test-consumer#test.cargo-generic-cargo-test-fixture'
+          nix run --no-write-lock-file './tests/cargo-test-consumer#test.cargo-generic-cargo-child'
           test -s "$test_package/cargo-tests.json"
           test -d "$test_package/libexec"
 

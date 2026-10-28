@@ -5,6 +5,7 @@ let
   mkFlakeCiWorkflow = import ./mk-flake-ci-workflow.nix;
   mkFlakeCiWorkflows = import ./mk-flake-ci-workflows.nix;
   mkCargoTestPackage = import ./mk-cargo-test-package.nix;
+  mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
@@ -111,6 +112,7 @@ in
     mkFlakeCiWorkflow
     mkFlakeCiWorkflows
     mkCargoTestPackage
+    mkCargoTestPackages
     rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs
