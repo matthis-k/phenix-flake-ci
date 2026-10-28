@@ -55,7 +55,8 @@ class TestPackageTests(unittest.TestCase):
                 "basic": test_item("basic"), "integration": test_item("integration")})
             args = query.call_args.args[0]
             self.assertEqual(args[-1], ".#packages.x86_64-linux")
-            self.assertIn("filterAttrs", args[-2])
+            self.assertIn("builtins.filter", args[-2])
+            self.assertIn("builtins.attrNames", args[-2])
 
     def test_verify_full_exact_head_set_and_fail_closed(self):
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
