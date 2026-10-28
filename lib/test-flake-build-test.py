@@ -88,6 +88,25 @@ class FourBuildersTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,"missing|stale|invalid"):
                     subject.common_outputs(p,g,b,path)
 
+    def test_isolated_worker_reinstantiates_only_exact_head_derivations(self):
+        p, _ = self.sample()
+        from unittest.mock import patch
+        with patch.object(subject.planner, "inventory", return_value=p["checks"]) as mock:
+            subject.materialize_exact_head_derivations(p)
+            mock.assert_called_once_with(".", p["system"])
+        with patch.object(subject.planner, "inventory",
+                          return_value={**p["checks"], "extra": drv("extra")}):
+            with self.assertRaisesRegex(ValueError, "unexpected"):
+                subject.materialize_exact_head_derivations(p)
+        with patch.object(subject.planner, "inventory",
+                          return_value={**p["checks"], "unit": drv("changed")}):
+            with self.assertRaisesRegex(ValueError, "changed"):
+                subject.materialize_exact_head_derivations(p)
+        with patch.object(subject.planner, "inventory",
+                          return_value={"shipping": p["checks"]["shipping"]}):
+            with self.assertRaisesRegex(ValueError, "missing"):
+                subject.materialize_exact_head_derivations(p)
+
     def test_duplicate_and_wrong_build_evidence_fails(self):
         p,g=self.sample()
         b=subject.build_plan(p,g)
