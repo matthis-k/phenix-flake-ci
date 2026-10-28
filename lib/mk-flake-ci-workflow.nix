@@ -175,9 +175,22 @@ let
       "    secrets:"
       (secret "TS_AUTHKEY")
     ];
+  # All PR events for one PR share a workflow-level cancellation key,
+  # regardless of which commit or base branch triggered the rerun. A run
+  # replaces an older in-flight run rather than launching another four-worker
+  # cluster. Push/dispatch events use their unique run_id so protected-branch
+  # builds are never implicitly serialized or canceled.
+  concurrencyLines =
+    if !pullRequest then [ ] else [
+      ""
+      "concurrency:"
+      ("  group: " + "$" + "{{ github.workflow }}-" + "$" + "{{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}")
+      ("  cancel-in-progress: " + "$" + "{{ github.event_name == 'pull_request' }}")
+    ];
   lines =
     [ "name: ${builtins.toJSON name}" "on:" ]
     ++ eventLines
+    ++ concurrencyLines
     ++ [ "" "permissions:" "  contents: read" ]
     ++ (if remoteSelected then [ "  id-token: write" ] else [ ])
     ++ [

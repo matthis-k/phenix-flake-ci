@@ -45,6 +45,17 @@ in
     assert builtins.match ".*config: \"ci/flake-check-config.nix\".*" pr != null;
     true;
 
+  samePrUpdatesCancelOnlyTheirOwnWorkflowRuns =
+    assert builtins.match ".*concurrency:.*" ownerTrusted != null;
+    assert builtins.match ".*github.workflow.*github.event.pull_request.number.*github.run_id.*" ownerTrusted != null;
+    assert builtins.match ".*github.run_id.*" ownerTrusted != null;
+    assert builtins.match ".*cancel-in-progress:.*github.event_name == 'pull_request'.*" ownerTrusted != null;
+    assert builtins.match ".*concurrency:.*" ownerPr != null;
+    assert builtins.match ".*github.workflow.*github.event.pull_request.number.*github.run_id.*" ownerPr != null;
+    assert builtins.match ".*cancel-in-progress:.*github.event_name == 'pull_request'.*" ownerPr != null;
+    assert builtins.match ".*concurrency:.*" trusted == null;
+    true;
+
   sameRepositoryOwnerPrUsesNativeNixAndSkipsStagedFallback =
     assert builtins.match ".*pull_request:.*" ownerTrusted != null;
     assert builtins.match ".*id-token: write.*" ownerTrusted != null;

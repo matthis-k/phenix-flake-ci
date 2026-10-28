@@ -50,6 +50,22 @@ through the native Nix store; it does not partition build/test work manually.
 The PR workflow uses the same Nix check inventory with the existing
 credential-free staged DAG backend. Neither changes the check list.
 
+## Duplicate PR run prevention
+
+Generated PR-capable callers include GitHub Actions workflow-level
+`concurrency`: runs for the same PR and workflow name use the same group,
+independent of the triggering event and head SHA. A newer PR run cancels
+the older in-flight or pending run, including its remote Nix coordinator
+and workers. Different PRs retain separate groups; trusted and untrusted
+callers use distinct workflow names so one cannot cancel the other's jobs.
+Push and manual-dispatch runs use their unique GitHub run ID, and are
+not canceled by PR activity or serialised accidentally.
+
+This is **per-PR execution deduplication**, not a global shared Nix scheduler.
+Independent PRs or independently triggered jobs (format/ACP/cache tests)
+can still execute overlapping work, which Nix substitutes from caches
+only when compatible outputs are available.
+
 ## Trust semantics
 
 - `trusted.repository` is mandatory and must be an exact owner/repository.
