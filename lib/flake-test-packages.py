@@ -153,7 +153,7 @@ def run_command(args):
               "commit": plan["commit"], "name": args.name,
               "drv": entry["drv"], "out": entry["out"], "status": "failed"}
     try:
-        subprocess.run(["nix", "run", "--offline", "--no-write-lock-file",
+        subprocess.run(["nix", "run", "--offline", "--no-substitute", "--max-jobs", "0", "--no-write-lock-file",
                         target(plan["system"], args.name)], check=True)
         result["status"] = "pass"
     finally:
