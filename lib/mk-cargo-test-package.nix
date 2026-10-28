@@ -31,6 +31,7 @@ pkgs.rustPlatform.buildRustPackage {
   buildPhase = ''
     runHook preBuild
     export CARGO_TARGET_DIR="$TMPDIR/cargo-test-target"
+    export CARGO_HOME="''${CARGO_HOME:-$TMPDIR/cargo-home}"
     mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME"
     if [ -f .cargo/config.toml ]; then
       cp .cargo/config.toml "$CARGO_HOME/config.toml"
