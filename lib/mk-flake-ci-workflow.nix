@@ -6,6 +6,7 @@
   libraryRef,
   name ? "Flake CI",
   events ? { },
+  admission ? null,
 }:
 let
   fail = message: throw "phenix-flake-ci: ${message}";
@@ -26,6 +27,29 @@ let
   pushBranches = events.pushBranches or [ "main" ];
   workflowDispatch = events.workflowDispatch or true;
   remoteSelected = backend == "nix-remote";
+  # Optional typed admission guard for a generated trusted push workflow.
+  # This checks manual dispatch refs too; raw GitHub expressions are never
+  # accepted from the consumer.
+  safeRepository = repository:
+    builtins.isString repository
+    && builtins.match "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" repository != null;
+  safeBranch = branch:
+    safePath branch
+    && branch != ""
+    && builtins.match ".*[.*?!\\[\\]{}].*" branch == null;
+  admissionBranches = if admission == null then [ ] else admission.branches or [ ];
+  admissionLines =
+    if admission == null then [ ] else
+    let
+      branches = builtins.concatStringsSep " || " (
+        map (branch: "github.ref == 'refs/heads/${branch}'") admissionBranches
+      );
+      predicate =
+        "github.repository == '${admission.repository}'"
+        + " && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
+        + " && (${branches})";
+    in
+    [ ("    if: " + "$" + "{{ " + predicate + " }}") ];
   workflowFile = {
     matrix = "flake-checks.yml";
     nix-dag = "flake-dag-staged.yml";
@@ -64,6 +88,15 @@ let
       fail "at least one workflow event must be enabled"
     else if remoteSelected && pullRequest then
       fail "untrusted pull_request triggers are forbidden for Tailscale builders"
+    else if admission != null && (!remoteSelected || !isAttrs admission
+      || !keysWithin admission [ "repository" "branches" ]) then
+      fail "typed admission is only supported for trusted remote CI"
+    else if admission != null && !safeRepository (admission.repository or null) then
+      fail "admission.repository must be an exact GitHub owner/repo"
+    else if admission != null && (!builtins.isList admissionBranches
+      || admissionBranches == [ ] || !(builtins.all safeBranch admissionBranches)
+      || admissionBranches != pushBranches) then
+      fail "admission requires exact, nonempty branches matching pushBranches"
     else
       true;
   eventLines =
@@ -104,6 +137,9 @@ let
       ""
       "jobs:"
       "  flake-checks:"
+    ]
+    ++ admissionLines
+    ++ [
       "    uses: matthis-k/phenix-flake-ci/.github/workflows/${workflowFile}@${libraryRef}"
       "    with:"
     ]
