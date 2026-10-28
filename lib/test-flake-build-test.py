@@ -45,6 +45,9 @@ class FourBuildersTests(unittest.TestCase):
         self.assertTrue(all(x not in p["checks"].values() for x in a["roots"]))
         self.assertEqual(a,subject.build_plan(p,g))
         self.assertEqual(a["estimatedUniqueDrvs"],3)
+        self.assertEqual(a["commonRoots"],[drv("shared")])
+        self.assertEqual(a["estimatedSharedDrvs"],1)
+        self.assertEqual(a["estimatedOverlapAfterCommon"],0)
 
     def test_no_compilation_depends_on_checks(self):
         p,g=self.sample()
@@ -64,6 +67,26 @@ class FourBuildersTests(unittest.TestCase):
         g["derivationDependencies"][drv("test-ship")] = [drv("test-unit")]
         with self.assertRaisesRegex(ValueError,"no independent compilation"):
             subject.build_plan(p,g)
+
+    def test_shared_frontier_evidence_is_exact_head_and_complete(self):
+        p,g=self.sample()
+        b=subject.build_plan(p,g)
+        common={"schemaVersion":1,"role":"common","commit":p["commit"],
+                "planDigest":p["digest"],"graphDigest":g["graphDigest"],
+                "buildDigest":b["digest"],
+                "outputs":{drv("shared"):["/nix/store/"+"b"*32+"-common"]}}
+        import json
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            path=Path(directory)/"common.json"
+            path.write_text(json.dumps(common))
+            self.assertEqual(subject.common_outputs(p,g,b,path),common["outputs"][drv("shared")])
+            for forged in ({**common,"outputs":{}},
+                           {**common,"buildDigest":"stale"},
+                           {**common,"outputs":{drv("shared"):["nix-store-not-absolute"]}}):
+                path.write_text(json.dumps(forged))
+                with self.assertRaisesRegex(ValueError,"missing|stale|invalid"):
+                    subject.common_outputs(p,g,b,path)
 
     def test_duplicate_and_wrong_build_evidence_fails(self):
         p,g=self.sample()
