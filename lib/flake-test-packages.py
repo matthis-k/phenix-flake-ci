@@ -20,10 +20,12 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 STORE = re.compile(r"/nix/store/[a-z0-9]{32}-[^\s]+\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 EVAL = (
-    'pkgs: builtins.mapAttrs (name: pkg: '
-    '{ drv = pkg.drvPath; out = pkg.outPath; }) '
-    '(builtins.filterAttrs (name: _: '
-    'builtins.match "test[.][A-Za-z0-9][A-Za-z0-9_-]*" name != null) pkgs)'
+    'pkgs: builtins.listToAttrs (builtins.map (name: '
+    '{ inherit name; value = let pkg = builtins.getAttr name pkgs; in '
+    '{ drv = pkg.drvPath; out = pkg.outPath; }; }) '
+    '(builtins.filter (name: '
+    'builtins.match "test[.][A-Za-z0-9][A-Za-z0-9_-]*" name != null) '
+    '(builtins.attrNames pkgs)))'
 )
 
 
