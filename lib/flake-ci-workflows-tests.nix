@@ -47,11 +47,11 @@ in
 
   samePrUpdatesCancelOnlyTheirOwnWorkflowRuns =
     assert builtins.match ".*concurrency:.*" ownerTrusted != null;
-    assert builtins.match ".*github.workflow.*format\('pr-\{0\}', github.event.pull_request.number\).*" ownerTrusted != null;
+    assert builtins.match ".*github.workflow.*github.event.pull_request.number.*github.run_id.*" ownerTrusted != null;
     assert builtins.match ".*github.run_id.*" ownerTrusted != null;
     assert builtins.match ".*cancel-in-progress:.*github.event_name == 'pull_request'.*" ownerTrusted != null;
     assert builtins.match ".*concurrency:.*" ownerPr != null;
-    assert builtins.match ".*github.workflow.*format\('pr-\{0\}', github.event.pull_request.number\).*" ownerPr != null;
+    assert builtins.match ".*github.workflow.*github.event.pull_request.number.*github.run_id.*" ownerPr != null;
     assert builtins.match ".*cancel-in-progress:.*github.event_name == 'pull_request'.*" ownerPr != null;
     assert builtins.match ".*concurrency:.*" trusted == null;
     true;
