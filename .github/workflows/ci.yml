@@ -38,7 +38,11 @@ jobs:
           nix build --no-write-lock-file --no-link \
             "$fixture#checks.x86_64-linux.cli" \
             "$fixture#checks.x86_64-linux.expected-failure" \
-            "$fixture#checks.x86_64-linux.lifecycle"
+            "$fixture#checks.x86_64-linux.lifecycle" \
+            "$fixture#checks.x86_64-linux.references" \
+            "$fixture#checks.x86_64-linux.file-content" \
+            "$fixture#checks.x86_64-linux.matrix-status" \
+            "$fixture#checks.x86_64-linux.matrix-invalid"
           path="$(nix build --no-write-lock-file --no-link --print-out-paths "$fixture#checks.x86_64-linux.cli")"
           test -s "$path/result.json"
           if nix build --no-write-lock-file --no-link "$fixture#packages.x86_64-linux.assertion-fails"; then
