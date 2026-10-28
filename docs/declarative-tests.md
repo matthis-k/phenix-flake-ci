@@ -159,6 +159,35 @@ checks.${system} = ciLib.mkTestCases {
 This yields independent checks named normal and invalid. Common arguments are not implicitly concatenated; a case can override the complete args list. Shared derivation references are reused by Nix rather than rebuilt for each case.
 
 
+## Reusable assertions and diagnostics
+
+The pure Nix `ciLib.testAssert` helpers construct the existing predicate IR without adding a new test runner. For example:
+
+```nix
+let
+  a = ciLib.testAssert;
+in
+ciLib.mkTest {
+  inherit pkgs;
+  name = "report-artifacts";
+  command = {
+    program = lib.getExe package;
+    args = [ "--report" ];
+  };
+  expect = {
+    exitCode = a.eq 0;
+    stdout.json."/status" = a.eq "ready";
+    files =
+      (a.files.required [ "report.json" "trace.json" ])
+      // (a.files.absent [ "error.log" ]);
+  };
+}
+```
+
+Helpers include `eq`, `ne`, `contains`, `matches`, `gt`, `gte`, `lt`, `lte`, `ref`, `jsonRef`, `stdout`, `stderr`, `exitCode`, `stdoutJson`, and `files.{exists,text,json,size,required,absent}`.
+
+For exact text and structured JSON equality failures, the runner prints a bounded unified diff of expected versus actual values in CI logs. Full expected and actual values remain in the structured failure evidence. Each missing artifact is independently reported; an assertion failure cannot masquerade as a successful derivation.
+
 ## Validation
 
 ```console

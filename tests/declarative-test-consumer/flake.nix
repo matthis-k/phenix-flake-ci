@@ -11,6 +11,7 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       ciLib = phenix-flake-ci.lib;
+      a = ciLib.testAssert;
       cli = pkgs.writeShellScriptBin "fixture-cli" ''
         case "$1" in
           status)
@@ -59,8 +60,8 @@
             exitCode = 0;
             stderr.empty = true;
             stdout.json = {
-              "/status" = "ready";
-              "/count" = { gte = 2; };
+              "/status" = a.eq "ready";
+              "/count" = a.gte 2;
             };
           };
         };
@@ -99,6 +100,14 @@
               };
             }
           ];
+        };
+        multi-artifact = ciLib.mkTest {
+          inherit pkgs;
+          name = "multi-artifact";
+          command = { inherit program; args = [ "write" ]; };
+          expect.files =
+            (a.files.required [ "state.json" ])
+            // (a.files.absent [ "unexpected.log" ]);
         };
         file-content = ciLib.mkTest {
           inherit pkgs;

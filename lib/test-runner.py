@@ -7,6 +7,7 @@ machine-readable evidence even when the Nix derivation fails.
 """
 
 import argparse
+import difflib
 import json
 import os
 from pathlib import Path
@@ -159,6 +160,27 @@ def compare(actual, predicate):
     return True, None
 
 
+def render_diff(predicate, actual):
+    """Compact unified diff for exact structured/text comparisons.
+
+    Preserve the complete expected/actual objects in machine evidence;
+    trim only the human-facing diff to keep CI logs manageable.
+    """
+    expected = predicate.get("eq") if isinstance(predicate, dict) and set(predicate) == {"eq"} else predicate
+    if type(expected) is not type(actual) or not isinstance(actual, (str, dict, list)):
+        return None
+    if isinstance(actual, str):
+        before, after = expected.splitlines(), actual.splitlines()
+    else:
+        before = json.dumps(expected, indent=2, ensure_ascii=False, sort_keys=True).splitlines()
+        after = json.dumps(actual, indent=2, ensure_ascii=False, sort_keys=True).splitlines()
+    lines = list(difflib.unified_diff(before, after, fromfile="expected", tofile="actual", lineterm=""))
+    if not lines:
+        return None
+    limit = 80
+    return "\n".join(lines[:limit] + ([f"... ({len(lines) - limit} additional diff lines)"] if len(lines) > limit else []))
+
+
 def check(expectations, actual, prefix, failures, results, observations=None):
     require(isinstance(expectations, dict), f"{prefix}: expectations must be an attribute set")
     for selector, predicate in expectations.items():
@@ -169,6 +191,9 @@ def check(expectations, actual, prefix, failures, results, observations=None):
             result = {"assertion": label, "pass": ok}
             if not ok:
                 result.update({"expected": resolved, "actual": actual[selector], "reason": description})
+                diff = render_diff(resolved, actual[selector])
+                if diff is not None:
+                    result["diff"] = diff
                 failures.append(result)
             results.append(result)
         except MissingReference as error:
@@ -388,8 +413,10 @@ def main():
         evidence = {"status": "invalid", "reason": str(error)}
     for failed in evidence.get("failures", []):
         print(f"FAIL {failed['assertion']}: {failed['reason']}", file=sys.stderr)
-        if "expected" in failed:
-            print(f"  expected: {failed['expected']!r}\n  actual:   {failed['actual']!r}", file=sys.stderr)
+        if "diff" in failed:
+            print(f"  diff:\n{failed['diff']}", file=sys.stderr)
+        elif "expected" in failed:
+            print(f"  expected: {repr(failed['expected'])[:1000]}\n  actual:   {repr(failed['actual'])[:1000]}", file=sys.stderr)
     if evidence["status"] == "invalid":
         print(f"INVALID: {evidence['reason']}", file=sys.stderr)
     print(json.dumps(evidence, sort_keys=True, ensure_ascii=False))
