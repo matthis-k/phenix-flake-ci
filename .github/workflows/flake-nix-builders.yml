@@ -26,6 +26,8 @@ jobs:
     outputs:
       workers: ${{ steps.pool.outputs.workers }}
       cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+      test_matrix: ${{ steps.runnable.outputs.tests }}
+      test_count: ${{ steps.runnable.outputs.test_count }}
     steps:
       - name: Require configured Tailscale federated identity
         env:
@@ -75,6 +77,12 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
             --plan ci-plan/plan.json --output ci-plan/graph.json
           echo "cache_prefix=$(jq -er .cachePrefix ci-plan/plan.json)" >> "$GITHUB_OUTPUT"
+      - name: Discover runnable test.* packages from the flake
+        id: runnable
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
+            --system "$(jq -er .system ci-plan/config.json)" \
+            --output ci-plan/test-packages.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
@@ -188,6 +196,10 @@ jobs:
             --machines ci-plan/machines --dag .ci-tools/flake-ci/lib/flake-check-dag.py \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json --timing ci-result/timing.json
+      - name: Build all discovered runnable test packages with the same Nix coordinator
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py build \
+            --plan ci-plan/test-packages.json --root ci-result/test-package-roots
       - name: Verify complete DAG shipping evidence
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
@@ -213,9 +225,56 @@ jobs:
           path: ci-result/
           if-no-files-found: warn
 
+  test:
+    name: Test package ${{ matrix.name }}
+    needs: [plan, coordinator]
+    if: needs.coordinator.result == 'success' && needs.plan.outputs.test_count != '0'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-plan/
+      - name: Restore compiled test packages read-only
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
+          restore-prefixes-first-match: |
+            remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
+          save: false
+      - name: Run exactly one already-built test package (no silent recompilation)
+        env:
+          TEST_NAME: ${{ matrix.name }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py run \
+            --plan ci-plan/test-packages.json --name "$TEST_NAME" \
+            --output "ci-result/evidence.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: runnable-test-${{ matrix.name }}-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-result/evidence.json
+          if-no-files-found: warn
+
   acceptance:
-    name: Require all builders and exact-head shipping evidence
-    needs: [plan, worker, coordinator]
+    name: Require all builders, runnable tests and exact-head shipping evidence
+    needs: [plan, worker, coordinator, test]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -224,10 +283,17 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           WORKERS: ${{ needs.worker.result }}
           COORDINATOR: ${{ needs.coordinator.result }}
+          TESTS: ${{ needs.test.result }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
         run: |
           test "$PLAN" = success
           test "$WORKERS" = success
           test "$COORDINATOR" = success
+          if [ "$TEST_COUNT" = 0 ]; then
+            test "$TESTS" = skipped
+          else
+            test "$TESTS" = success
+          fi
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: matthis-k/phenix-flake-ci
@@ -247,3 +313,13 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.plan.outputs.test_count != '0'
+        with:
+          pattern: runnable-test-*-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: runnable-evidence/
+      - name: Require every discovered executable test package to pass
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
+            --plan ci-plan/test-packages.json --results runnable-evidence
+
