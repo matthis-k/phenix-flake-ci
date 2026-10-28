@@ -120,6 +120,29 @@ def exact_head(plan):
     if planner.run_command(["git", "rev-parse", "HEAD"]) != plan["commit"]:
         raise ValueError("build/test checkout does not match exact commit")
 
+def materialize_exact_head_derivations(plan):
+    """Re-instantiate the checked-out flake's full Nix derivation graph.
+
+    Nix store caches carry outputs but unbuilt .drv paths from a separate
+    planning job may be absent from this runner's Nix store. Calling
+    `nix build /nix/store/<drv>.drv^*` first can then fail with
+    "don't know how to build these paths". Exact-head flake evaluation
+    registers the derivations without executing the Nix checks. Reject
+    any changed evaluation rather than building an unexpected derivation.
+    """
+    observed = planner.inventory(".", plan["system"])
+    if observed != plan["checks"]:
+        missing = sorted(set(plan["checks"]) - set(observed))
+        changed = sorted(name for name in observed.keys() & plan["checks"].keys()
+                         if observed[name] != plan["checks"][name])
+        unexpected = sorted(set(observed) - set(plan["checks"]))
+        raise ValueError(
+            f"exact-head derivation inventory changed during worker re-evaluation: "
+            f"missing={missing}, changed={changed}, unexpected={unexpected}")
+    print(f"Instantiated {len(observed)} exact-head check roots and their "
+          "transitive Nix derivations without executing any check")
+
+
 def plan_cmd(args):
     result = build_plan(load(args.plan), load(args.graph))
     save(args.output, result)
@@ -146,6 +169,7 @@ def outputs_from_nix(drvs):
 def common_cmd(args):
     plan, graph, staging = validated(args.plan, args.graph, args.build_plan)
     exact_head(plan)
+    materialize_exact_head_derivations(plan)
     realized = outputs_from_nix(staging["commonRoots"])
     roots = Path(args.gc_roots_dir)
     roots.mkdir(parents=True, exist_ok=True)
@@ -193,6 +217,7 @@ def common_verify_cmd(args):
 def worker_cmd(args):
     plan, graph, staging = validated(args.plan, args.graph, args.build_plan)
     exact_head(plan)
+    materialize_exact_head_derivations(plan)
     worker = next((w for w in staging["workers"] if w["id"] == args.worker), None)
     if worker is None:
         raise ValueError("unregistered build worker")
