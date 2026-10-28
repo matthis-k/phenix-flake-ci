@@ -20,6 +20,7 @@ in ciLib.mkFlakeCheckConfig {
         slotsPerWorker = 2;
       };
       # workflowDispatch = true; # Optional; ref/repository guard mandatory.
+      # pullRequestAuthors = [ "matthis-k" ]; # Optional owner PR native Nix path
     };
     pullRequest.backend = "nix-dag";
   };
@@ -61,8 +62,25 @@ credential-free staged DAG backend. Neither changes the check list.
 - Push refs in this list must be protected against untrusted edits.
   GitHub branch protection/rulesets and Tailscale federated-identity grants
   are operational responsibilities beyond YAML generation.
-- Pull requests cannot select `nix-remote`, get `id-token: write`,
-  forward secrets, or gain a trusted cache writer.
+- By default, pull requests use the unprivileged staged backend. With
+  `trusted.pullRequestAuthors = [ "matthis-k" ];`, PRs authored by the listed
+  GitHub account **and whose head branch is in the trusted repository itself**
+  run through the same native one-coordinator/four-builder backend as main.
+  The workflow's job-level admission verifies the exact repository, PR author,
+  and head-repository identity. Fork PRs and all other authors continue to use
+  credential-free staged CI; the two PR jobs have complementary guards.
+- The approved author must control the head branch and its allowed editors.
+  Anyone able to change a trusted same-repository PR branch can run arbitrary
+  build code with its delegated Tailscale builder authority. Protect this via
+  repository write permissions/branch rules, not Git author or commit messages.
+- The trusted GitHub pull_request event must be allowed to access the Tailscale
+  federated-identity grant for the tagged builders. Branch-only OIDC grants
+  will not automatically authorize a pull_request subject. Do not use
+  pull_request_target to bypass these safeguards.
+- Only approved same-repository PRs may select `nix-remote` and receive
+  `id-token: write`; other PRs never receive Tailscale credentials or a
+  trusted cache writer. Test jobs remain read-only, and remote artifact
+  publication remains disabled on PR events.
 - Both workflow callers use the same immutable library ref and
   `configPath`. The library's full-Nix shipping evidence remains required.
 

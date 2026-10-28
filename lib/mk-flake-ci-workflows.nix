@@ -21,6 +21,7 @@ let
   workflowDispatch = trusted.workflowDispatch or false;
   remote = trusted.remote or { };
   prBackend = pr.backend or "nix-dag";
+  prAuthors = trusted.pullRequestAuthors or [ ];
   valid =
     if !isAttrs names || !keysWithin names [ "trusted" "pullRequest" ]
       || !builtins.isString trustedName || trustedName == ""
@@ -29,7 +30,7 @@ let
     else if !isAttrs ci || !keysWithin ci [ "trusted" "pullRequest" ] then
       fail "CI policy must define only trusted and pullRequest"
     else if !isAttrs trusted || !keysWithin trusted
-      [ "repository" "branches" "backend" "remote" "workflowDispatch" ] then
+      [ "repository" "branches" "backend" "remote" "workflowDispatch" "pullRequestAuthors" ] then
       fail "trusted CI accepts repository, branches, backend, remote and workflowDispatch"
     else if !isAttrs pr || !keysWithin pr [ "backend" ] then
       fail "pullRequest CI accepts only backend"
@@ -39,6 +40,8 @@ let
       fail "untrusted pull requests must use nix-dag or matrix"
     else if !builtins.isBool workflowDispatch then
       fail "trusted.workflowDispatch must be boolean"
+    else if !builtins.isList prAuthors then
+      fail "trusted.pullRequestAuthors must be a list of GitHub logins"
     else
       true;
 in
@@ -49,11 +52,11 @@ assert valid;
     inherit configPath libraryRef;
     name = trustedName;
     events = {
-      pullRequest = false;
+      pullRequest = prAuthors != [ ];
       pushBranches = branches;
       inherit workflowDispatch;
     };
-    admission = { inherit repository branches; };
+    admission = { inherit repository branches; pullRequestAuthors = prAuthors; };
   };
 
   pullRequest = mk {
@@ -64,6 +67,10 @@ assert valid;
       pullRequest = true;
       pushBranches = [ ];
       workflowDispatch = false;
+    };
+    untrustedExclusion = if prAuthors == [ ] then null else {
+      inherit repository;
+      authors = prAuthors;
     };
   };
 }

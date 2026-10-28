@@ -22,6 +22,12 @@ let
     pullRequest.backend = "nix-dag";
   };
   make = ci: mk (base // { inherit ci; });
+  ownerPolicy = policy // {
+    trusted = policy.trusted // { pullRequestAuthors = [ "matthis-k" ]; };
+  };
+  ownerWorkflows = make ownerPolicy;
+  ownerTrusted = flat ownerWorkflows.trusted;
+  ownerPr = flat ownerWorkflows.pullRequest;
   values = make policy;
   flat = builtins.replaceStrings [ "\n" ] [ " " ];
   trusted = flat values.trusted;
@@ -37,6 +43,22 @@ in
     assert builtins.match ".*library_ref: \"${sha}\".*" pr != null;
     assert builtins.match ".*config: \"ci/flake-check-config.nix\".*" trusted != null;
     assert builtins.match ".*config: \"ci/flake-check-config.nix\".*" pr != null;
+    true;
+
+  sameRepositoryOwnerPrUsesNativeNixAndSkipsStagedFallback =
+    assert builtins.match ".*pull_request:.*" ownerTrusted != null;
+    assert builtins.match ".*id-token: write.*" ownerTrusted != null;
+    assert builtins.match ".*github.event.pull_request.user.login == 'matthis-k'.*" ownerTrusted != null;
+    assert builtins.match ".*github.event.pull_request.head.repo.full_name == 'matthis-k/phenix-ai'.*" ownerTrusted != null;
+    assert builtins.match ".*github.event_name == 'pull_request'.*" ownerTrusted != null;
+    assert builtins.match ".*flake-nix-builders.yml@${sha}.*" ownerTrusted != null;
+    assert builtins.match ".*pull_request:.*" ownerPr != null;
+    assert builtins.match ".*github.event.pull_request.user.login == 'matthis-k'.*" ownerPr != null;
+    assert builtins.match ".*github.event.pull_request.head.repo.full_name == 'matthis-k/phenix-ai'.*" ownerPr != null;
+    assert builtins.match ".*&& !\\(github.repository.*" ownerPr != null;
+    assert builtins.match ".*flake-dag-staged.yml@${sha}.*" ownerPr != null;
+    assert builtins.match ".*id-token: write.*" ownerPr == null;
+    assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" ownerPr == null;
     true;
 
   nativeDefaultsAreFourBuildersAndTwoSlots =
@@ -109,6 +131,10 @@ in
     assert fail (policy // { trusted = policy.trusted // { branches = [ "main" "ci/*" ]; }; });
     assert fail (policy // { trusted = policy.trusted // { branches = [ "main" "main" ]; }; });
     assert fail (policy // { trusted = policy.trusted // { workflowDispatch = "true"; }; });
+    assert fail (policy // { trusted = policy.trusted // { pullRequestAuthors = "matthis-k"; }; });
+    assert fail (policy // { trusted = policy.trusted // { pullRequestAuthors = [ "matthis-k" "matthis-k" ]; }; });
+    assert fail (policy // { trusted = policy.trusted // { pullRequestAuthors = [ "other' || true" ]; }; });
+    assert fail (policy // { trusted = policy.trusted // { pullRequestAuthors = [ "wrong/user" ]; }; });
     assert failCall { libraryRef = "main"; ci = policy; };
     true;
 }
