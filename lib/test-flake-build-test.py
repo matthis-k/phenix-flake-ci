@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Pure DAG proof for four build workers preceding any check execution."""
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 module = Path(__file__).with_name("flake-build-test.py")
 spec = importlib.util.spec_from_file_location("four_builders_test", module)
@@ -106,6 +111,67 @@ class FourBuildersTests(unittest.TestCase):
                           return_value={"shipping": p["checks"]["shipping"]}):
             with self.assertRaisesRegex(ValueError, "missing"):
                 subject.materialize_exact_head_derivations(p)
+
+    def test_join_execution_rejects_invalid_handoffs(self):
+        p, g = self.sample()
+        b = subject.build_plan(p, g)
+        for case, message in (("missing", "four builder"),
+                              ("repeated", "repeated builder"),
+                              ("wrong-owner", "derivation evidence"),
+                              ("stale", "stale"),
+                              ("missing-archive", "missing build archive"),
+                              ("empty-archive", "empty archive"),
+                              ("corrupt", None),
+                              ("valid", None)):
+            with self.subTest(case=case), TemporaryDirectory() as directory:
+                root = Path(directory)
+                args = SimpleNamespace(plan="plan", graph="graph", build_plan="build",
+                                       builders=root, common="common", prebuild="prebuild",
+                                       archive=root / "joined.nar", output=root / "joined.json")
+                for i, worker in enumerate(b["workers"]):
+                    if case == "missing" and i == 3:
+                        continue
+                    folder = root / worker["id"]
+                    folder.mkdir()
+                    item = {"schemaVersion": 1, "role": worker["id"],
+                            "commit": p["commit"], "planDigest": p["digest"],
+                            "graphDigest": g["graphDigest"], "buildDigest": b["digest"],
+                            "outputs": {d: [D + "-out"] for d in worker["roots"]},
+                            "exportedPaths": [D + "-out"]}
+                    if case == "repeated" and i == 1:
+                        item["role"] = b["workers"][0]["id"]
+                    if case == "wrong-owner" and i == 0:
+                        item["outputs"] = {drv("not-owned"): [D + "-out"]}
+                    if case == "stale" and i == 0:
+                        item["buildDigest"] = "stale"
+                    (folder / "evidence.json").write_text(json.dumps(item))
+                    if case != "missing-archive" or i != 0:
+                        (folder / "store.nar").write_bytes(
+                            b"" if case == "empty-archive" else b"archive")
+                with patch.object(subject, "validated", return_value=(p, g, b)), \
+                     patch.object(subject, "exact_head"), \
+                     patch.object(subject, "common_outputs", return_value=[]), \
+                     patch.object(subject.staged, "shared_outputs", return_value=[]), \
+                     patch.object(subject.staged, "export_incremental_archive", return_value=[]) as export, \
+                     patch.object(subject.planner, "run_command", return_value=D + "-out\n"), \
+                     patch.object(subject.subprocess, "run") as run:
+                    if case == "corrupt":
+                        run.side_effect = subprocess.CalledProcessError(1, ["nix-store", "--import"])
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            subject.join_cmd(args)
+                    elif case == "valid":
+                        subject.join_cmd(args)
+                        self.assertEqual(run.call_count, 4)
+                        report = json.loads(args.output.read_text())
+                        self.assertEqual(set(report["outputs"]), set(b["roots"]))
+                        self.assertEqual(report["role"], "build-join")
+                        export.assert_called_once()
+                        continue
+                    else:
+                        with self.assertRaisesRegex(ValueError, message):
+                            subject.join_cmd(args)
+                    self.assertFalse(args.output.exists())
+                    export.assert_not_called()
 
     def test_duplicate_and_wrong_build_evidence_fails(self):
         p,g=self.sample()
