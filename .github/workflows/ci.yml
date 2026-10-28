@@ -46,6 +46,9 @@ jobs:
       - name: Verify shared cache retention and read-only shards
         run: python3 lib/test-cache-retention-workflows.py -v
 
+      - name: Test generic executable test package discovery and evidence
+        run: python3 lib/test-flake-test-packages.py -v
+
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
 
