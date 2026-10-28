@@ -41,6 +41,24 @@ in
     assert builtins.match ".*config: \"ci/flake-check-config.nix\".*" dagYaml != null;
     true;
 
+  nativePrCancellationIsScopedAndMainRunsRemainIndependent =
+    let
+      owner = flat (mkWorkflow (base // {
+        ci = remote;
+        events = { pullRequest = true; pushBranches = [ "main" ]; workflowDispatch = false; };
+        admission = {
+          repository = "matthis-k/phenix-ai";
+          branches = [ "main" ];
+          pullRequestAuthors = [ "matthis-k" ];
+        };
+      }));
+    in
+    assert builtins.match ".*concurrency:.*" owner != null;
+    assert builtins.match ".*github.workflow.*github.event.pull_request.number.*github.run_id.*" owner != null;
+    assert builtins.match ".*cancel-in-progress:.*github.event_name == 'pull_request'.*" owner != null;
+    assert builtins.match ".*concurrency:.*" remoteYaml == null;
+    true;
+
   remoteBuildersRequireTrustedTriggersAndOidc =
     assert builtins.match ".*flake-nix-builders.yml@${sha}.*" remoteYaml != null;
     assert builtins.match ".*worker_count: 4.*" remoteYaml != null;
