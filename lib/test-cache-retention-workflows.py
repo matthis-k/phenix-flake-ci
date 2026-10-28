@@ -69,6 +69,8 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
             if job == "  leaf:\\n":
                 section = section.split("  join:\\n", 1)[0]
             self.assertIn("save: false", section)
+            self.assertNotIn("save: true", section)
+            self.assertNotIn("secrets: inherit", section)
             self.assertNotIn(
                 "remote-${{ needs.plan.outputs.cache_prefix }}-", section,
                 "leaf/join must restore the exact-head prebuild cache",
