@@ -195,11 +195,8 @@ jobs:
           python3 .ci-tools/flake-ci/lib/nix-remote-workers.py build \
             --machines ci-plan/machines --dag .ci-tools/flake-ci/lib/flake-check-dag.py \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
-            --evidence ci-result/evidence.json --timing ci-result/timing.json
-      - name: Build all discovered runnable test packages with the same Nix coordinator
-        run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py build \
-            --plan ci-plan/test-packages.json --root ci-result/test-package-roots
+            --evidence ci-result/evidence.json --timing ci-result/timing.json \
+            --test-packages ci-plan/test-packages.json --test-root ci-result/test-package-roots
       - name: Verify complete DAG shipping evidence
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
@@ -324,4 +321,3 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
             --plan ci-plan/test-packages.json --results runnable-evidence
-

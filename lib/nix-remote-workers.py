@@ -154,6 +154,10 @@ def build(args):
         subprocess.run(["python3", args.dag, "build", "--plan", args.plan,
                         "--graph", args.graph, "--output", args.evidence],
                        env=env, check=True)
+        if args.test_packages:
+            subprocess.run(["python3", str(Path(__file__).with_name("flake-test-packages.py")),
+                            "build", "--plan", args.test_packages,
+                            "--root", args.test_root], env=env, check=True)
     finally:
         output = Path(args.timing)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -218,6 +222,8 @@ def main():
     b.add_argument("--graph", required=True)
     b.add_argument("--evidence", required=True)
     b.add_argument("--timing", required=True)
+    b.add_argument("--test-packages")
+    b.add_argument("--test-root", default="ci-result/test-package-roots")
     b.set_defaults(func=build)
     s = sub.add_parser("stop")
     s.add_argument("--hosts", required=True)
