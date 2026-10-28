@@ -20,6 +20,63 @@ class InvalidSpec(ValueError):
     pass
 
 
+class MissingReference(Exception):
+    """A previous execution did not produce an expected observation."""
+    pass
+
+
+def is_reference(value):
+    return isinstance(value, dict) and set(value) == {"ref"}
+
+
+def validate_references(value, available, where):
+    """Reject forward/unknown references before executing any command."""
+    if is_reference(value):
+        ref = value["ref"]
+        require(isinstance(ref, dict) and set(ref) in (
+            {"step", "field"}, {"step", "field", "json"}),
+            f"{where}: ref needs step, field and optional json")
+        require(ref["step"] in available, f"{where}: reference to unknown or future step {ref['step']!r}")
+        require(ref["field"] in ("stdout", "stderr", "exitCode"),
+                f"{where}: unknown observation field")
+        require("json" not in ref or ref["field"] in ("stdout", "stderr"),
+                f"{where}: json selector only works on output streams")
+        if "json" in ref:
+            validate_pointer(ref["json"])
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            validate_references(item, available, f"{where}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_references(item, available, f"{where}[{index}]")
+
+
+def validate_pointer(location):
+    validate_pointer(location)
+    require(re.search(r"~(?![01])", location) is None,
+            f"invalid JSON pointer escape: {location!r}")
+
+
+def materialize_refs(value, observations):
+    if is_reference(value):
+        ref = value["ref"]
+        observed = observations.get(ref["step"], {})
+        if ref["field"] not in observed:
+            raise MissingReference(f"{ref['step']}.{ref['field']} not available")
+        actual = observed[ref["field"]]
+        if "json" in ref:
+            try:
+                actual = pointer(json.loads(actual), ref["json"])
+            except (ValueError, KeyError, IndexError, TypeError) as error:
+                raise MissingReference(f"{ref['step']}.{ref['field']} JSON {ref['json']!r}: {error}") from error
+        return actual
+    if isinstance(value, list):
+        return [materialize_refs(item, observations) for item in value]
+    if isinstance(value, dict):
+        return {key: materialize_refs(item, observations) for key, item in value.items()}
+    return value
+
+
 def require(condition, description):
     if not condition:
         raise InvalidSpec(description)
@@ -102,16 +159,21 @@ def compare(actual, predicate):
     return True, None
 
 
-def check(expectations, actual, prefix, failures, results):
+def check(expectations, actual, prefix, failures, results, observations=None):
     require(isinstance(expectations, dict), f"{prefix}: expectations must be an attribute set")
     for selector, predicate in expectations.items():
         label = f"{prefix}.{selector}"
         try:
-            ok, description = compare(actual[selector], predicate)
+            resolved = materialize_refs(predicate, observations or {})
+            ok, description = compare(actual[selector], resolved)
             result = {"assertion": label, "pass": ok}
             if not ok:
-                result.update({"expected": predicate, "actual": actual[selector], "reason": description})
+                result.update({"expected": resolved, "actual": actual[selector], "reason": description})
                 failures.append(result)
+            results.append(result)
+        except MissingReference as error:
+            result = {"assertion": label, "pass": False, "reason": f"unavailable reference: {error}"}
+            failures.append(result)
             results.append(result)
         except (InvalidSpec, TypeError, ValueError, re.error) as error:
             raise InvalidSpec(f"{label}: {error}") from error
@@ -125,8 +187,8 @@ def validate_command(command, label):
     require(isinstance(command, dict) and isinstance(command.get("program"), str)
             and bool(command["program"]), f"{label}.command.program must be a nonempty string")
     args = command.get("args", [])
-    require(isinstance(args, list) and all(isinstance(x, str) for x in args),
-            f"{label}.command.args must be a list of strings")
+    require(isinstance(args, list) and all(isinstance(x, str) or is_reference(x) for x in args),
+            f"{label}.command.args must contain strings or references")
     timeout = command.get("timeoutSeconds", 30)
     require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0,
             f"{label}.command.timeoutSeconds must be positive")
@@ -145,6 +207,19 @@ def test(spec):
         require(isinstance(steps, list) and bool(steps), "steps must be a nonempty list")
         final_expect = spec.get("expect", {})
     require(isinstance(final_expect, dict), "expect must be an attribute set")
+    # Validate every reference and command shape before any side effect.
+    seen = set()
+    for index, step in enumerate(steps):
+        require(isinstance(step, dict), f"step[{index}] must be an attribute set")
+        sid = step.get("id", f"step-{index}")
+        require(isinstance(sid, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", sid) is not None,
+                f"step[{index}].id is invalid")
+        require(sid not in seen, f"duplicate step ID: {sid}")
+        argv, _ = validate_command(step.get("command"), sid)
+        validate_references(argv, seen, f"{sid}.command")
+        validate_references(step.get("expect", {}), seen, f"{sid}.expect")
+        seen.add(sid)
+    validate_references(final_expect, seen, "expect")
     failures, results, observations = [], [], {}
     with tempfile.TemporaryDirectory(prefix="phenix-test-") as temp:
         root = Path(temp).resolve()
@@ -169,6 +244,15 @@ def test(spec):
             require(sid not in ids, f"duplicate step ID: {sid}")
             ids.add(sid)
             argv, timeout = validate_command(step.get("command"), sid)
+            try:
+                argv = materialize_refs(argv, observations)
+                if not all(isinstance(arg, str) for arg in argv):
+                    raise MissingReference("command argument resolved to a non-string; select a string field")
+            except MissingReference as error:
+                failures.append({"assertion": f"{sid}.execution", "pass": False,
+                                 "reason": f"cannot resolve command argument: {error}"})
+                observations[sid] = {}
+                continue
             expected = step.get("expect", {})
             require(isinstance(expected, dict), f"{sid}.expect must be an attribute set")
             require(set(expected) <= {"exitCode", "stdout", "stderr", "files"},
@@ -187,7 +271,7 @@ def test(spec):
             observations[sid] = observed
             if "exitCode" not in observed:
                 continue
-            check({"exitCode": expected.get("exitCode", 0)}, observed, sid, failures, results)
+            check({"exitCode": expected.get("exitCode", 0)}, observed, sid, failures, results, observations)
             for channel in ("stdout", "stderr"):
                 if channel not in expected:
                     continue
@@ -203,7 +287,7 @@ def test(spec):
                             try:
                                 actual = pointer(document, location)
                                 check({location: predicate}, {location: actual},
-                                      f"{sid}.{channel}.json", failures, results)
+                                      f"{sid}.{channel}.json", failures, results, observations)
                             except (KeyError, IndexError, TypeError) as error:
                                 result = {"assertion": f"{sid}.{channel}.json.{location}", "pass": False,
                                           "reason": f"missing JSON location: {error}"}
@@ -219,25 +303,77 @@ def test(spec):
                     observation = len(observed[channel]) == 0 if operation == "empty" else observed[channel]
                     predicate = expected_value if operation == "empty" else {operation: expected_value}
                     check({operation: predicate}, {operation: observation},
-                          f"{sid}.{channel}", failures, results)
+                          f"{sid}.{channel}", failures, results, observations)
             if "files" in expected:
-                verify_files(root, expected["files"], f"{sid}.files", failures, results)
+                verify_files(root, expected["files"], f"{sid}.files", failures, results, observations)
         require(set(final_expect) <= {"files"}, "top-level expect supports only files for multi-step tests")
         if "files" in final_expect:
-            verify_files(root, final_expect["files"], "files", failures, results)
+            verify_files(root, final_expect["files"], "files", failures, results, observations)
     return {"name": spec.get("name", "test"), "status": "fail" if failures else "pass",
             "assertions": results, "failures": failures, "steps": list(observations)}
 
 
-def verify_files(root, files, prefix, failures, results):
+def verify_files(root, files, prefix, failures, results, observations):
     require(isinstance(files, dict), f"{prefix} must be an attribute set")
     for filename, predicates in files.items():
         path = safe_path(root, filename)
-        require(isinstance(predicates, dict) and "exists" in predicates,
-                f"{prefix}.{filename}: a file assertion needs exists")
-        require(set(predicates) == {"exists"}, f"{prefix}.{filename}: only exists is supported")
-        check({"exists": predicates["exists"]}, {"exists": path.exists()},
-              f"{prefix}.{filename}", failures, results)
+        label = f"{prefix}.{filename}"
+        require(isinstance(predicates, dict) and bool(predicates),
+                f"{label}: file assertions must be a nonempty set")
+        require(set(predicates) <= {"exists", "text", "json", "size"},
+                f"{label}: unknown file assertions")
+        exists = path.exists()
+        presence = predicates.get("exists", True)
+        require(isinstance(presence, bool), f"{label}.exists must be a boolean")
+        require(presence or len(predicates) == 1,
+                f"{label}: cannot request content of an expected-absent file")
+        check({"exists": presence}, {"exists": exists}, label,
+              failures, results, observations)
+        if not exists or len(predicates) == 1 and "exists" in predicates:
+            continue
+        require(path.is_file(), f"{label}: content assertions require a regular file")
+        if "size" in predicates:
+            check({"size": predicates["size"]}, {"size": path.stat().st_size},
+                  label, failures, results, observations)
+        if "text" in predicates or "json" in predicates:
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                result = {"assertion": f"{label}.text", "pass": False,
+                          "reason": f"cannot read UTF-8 content: {error}"}
+                failures.append(result)
+                results.append(result)
+                continue
+            if "text" in predicates:
+                text_tests = predicates["text"]
+                require(isinstance(text_tests, dict) and bool(text_tests) and
+                        set(text_tests) <= {"eq", "ne", "contains", "matches", "empty"},
+                        f"{label}.text: invalid string assertions")
+                for operation, expected_value in text_tests.items():
+                    actual = len(content) == 0 if operation == "empty" else content
+                    predicate = expected_value if operation == "empty" else {operation: expected_value}
+                    check({operation: predicate}, {operation: actual},
+                          f"{label}.text", failures, results, observations)
+            if "json" in predicates:
+                require(isinstance(predicates["json"], dict), f"{label}.json must be an attribute set")
+                try:
+                    document = json.loads(content)
+                except json.JSONDecodeError as error:
+                    result = {"assertion": f"{label}.json", "pass": False,
+                              "reason": f"invalid JSON: {error}"}
+                    failures.append(result)
+                    results.append(result)
+                    continue
+                for location, predicate in predicates["json"].items():
+                    try:
+                        actual = pointer(document, location)
+                        check({location: predicate}, {location: actual},
+                              f"{label}.json", failures, results, observations)
+                    except (KeyError, IndexError, TypeError) as error:
+                        result = {"assertion": f"{label}.json.{location}", "pass": False,
+                                  "reason": f"missing JSON location: {error}"}
+                        results.append(result)
+                        failures.append(result)
 
 
 def main():
