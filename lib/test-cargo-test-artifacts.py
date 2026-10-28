@@ -41,14 +41,23 @@ class CargoArtifactsTest(unittest.TestCase):
             manifest = root / "input.jsonl"
             manifest.write_text(self.record("unit", executable) + "\n")
             dest = root / "out" / "libexec"
-            subject.install(manifest, dest)
+            metadata = root / "metadata.json"
+            package_id = "path+file:///source#unit@0.1.0"
+            metadata.write_text(json.dumps({
+                "packages": [{"id": package_id, "name": "unit"}],
+                "workspace_members": [package_id],
+            }))
+            subject.install(manifest, dest, metadata)
             self.assertEqual(len(list(dest.iterdir())), 1)
-            self.assertEqual(json.loads((root/"out"/"cargo-tests.json").read_text())[0]["target"], "unit")
+            record = json.loads((root/"out"/"cargo-tests.json").read_text())[0]
+            self.assertEqual(record["target"], "unit")
+            self.assertEqual(record["package"], "unit")
+            self.assertTrue((dest / record["binary"]).is_file())
             with self.assertRaisesRegex(ValueError, "empty"):
-                subject.install(manifest, dest)
+                subject.install(manifest, dest, metadata)
             manifest.write_text(self.record("unit", root / "missing") + "\n")
             with self.assertRaisesRegex(ValueError, "missing"):
-                subject.install(manifest, root / "new" / "libexec")
+                subject.install(manifest, root / "new" / "libexec", metadata)
 
     def test_empty_input_and_invalid_identity_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "no compiled"):

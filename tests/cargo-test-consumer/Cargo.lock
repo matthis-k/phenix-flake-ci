@@ -4,3 +4,7 @@ version = 4
 [[package]]
 name = "generic-cargo-test-fixture"
 version = "0.1.0"
+
+[[package]]
+name = "generic-cargo-child"
+version = "0.1.0"

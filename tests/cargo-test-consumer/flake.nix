@@ -8,7 +8,13 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
     in {
-      packages.${system}.default = phenix-flake-ci.lib.mkCargoTestPackage {
+      packages.${system} = {
+        default = phenix-flake-ci.lib.mkCargoTestPackage {
+          inherit pkgs;
+          src = ./.;
+          lockFile = ./Cargo.lock;
+        };
+      } // phenix-flake-ci.lib.mkCargoTestPackages {
         inherit pkgs;
         src = ./.;
         lockFile = ./Cargo.lock;

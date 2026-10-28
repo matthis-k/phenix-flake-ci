@@ -5,3 +5,7 @@ edition = "2021"
 
 [lib]
 path = "src/lib.rs"
+
+[workspace]
+members = ["crates/*"]
+resolver = "2"
