@@ -36,7 +36,7 @@ def validate_references(value, available, where):
         require(isinstance(ref, dict) and set(ref) in (
             {"step", "field"}, {"step", "field", "json"}),
             f"{where}: ref needs step, field and optional json")
-        require(ref["step"] in available, f"{where}: reference to unknown or future step {ref['step']!r}")
+        require(isinstance(ref["step"], str) and ref["step"] in available, f"{where}: reference to unknown or future step {ref['step']!r}")
         require(ref["field"] in ("stdout", "stderr", "exitCode"),
                 f"{where}: unknown observation field")
         require("json" not in ref or ref["field"] in ("stdout", "stderr"),
@@ -52,7 +52,8 @@ def validate_references(value, available, where):
 
 
 def validate_pointer(location):
-    validate_pointer(location)
+    require(isinstance(location, str) and (location == "" or location.startswith("/")),
+            f"invalid JSON pointer: {location!r}")
     require(re.search(r"~(?![01])", location) is None,
             f"invalid JSON pointer escape: {location!r}")
 
@@ -91,8 +92,7 @@ def safe_path(root, name):
 
 
 def pointer(value, location):
-    require(isinstance(location, str) and (location == "" or location.startswith("/")),
-            f"invalid JSON pointer: {location!r}")
+    validate_pointer(location)
     for part in location.split("/")[1:] if location else []:
         require(re.search(r"~(?![01])", part) is None, f"invalid JSON pointer escape: {location!r}")
         part = part.replace("~1", "/").replace("~0", "~")
