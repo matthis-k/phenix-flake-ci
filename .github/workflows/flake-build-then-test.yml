@@ -31,6 +31,8 @@ jobs:
       builders: ${{ steps.buildcut.outputs.builders }}
       digest: ${{ steps.plan.outputs.digest }}
       cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+      test_matrix: ${{ steps.runnable.outputs.tests }}
+      test_count: ${{ steps.runnable.outputs.test_count }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -55,6 +57,12 @@ jobs:
           nix eval --json --file "$CONFIG_FILE" > ci-plan/config.json
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py plan \
             --config ci-plan/config.json --output ci-plan/plan.json
+      - name: Discover runnable test.* packages from the flake
+        id: runnable
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
+            --system "$(jq -er .system ci-plan/config.json)" \
+            --output ci-plan/test-packages.json
       - name: Restore identical evaluated DAG
         id: cached_dag
         uses: actions/cache/restore@v4
@@ -264,6 +272,21 @@ jobs:
             --build-plan ci-plan/build.json --builders built-shards \
             --prebuild ci-plan/prebuild.json --common ci-plan/common.json \
             --archive build-joined/store.nar --output build-joined/evidence.json
+      - name: Build and export runnable package closures through native Nix
+        run: |
+          set -euo pipefail
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py build \
+            --plan ci-plan/test-packages.json --root "${RUNNER_TEMP}/test-package-roots"
+          mapfile -t outputs < <(jq -r '.tests[].out' ci-plan/test-packages.json)
+          if [ "${#outputs[@]}" -gt 0 ]; then
+            nix copy --to "file://$PWD/test-package-store" "${outputs[@]}"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: needs.plan.outputs.test_count != '0'
+        with:
+          name: runnable-package-store
+          path: test-package-store/
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compiled-joined
@@ -334,10 +357,58 @@ jobs:
           path: dag-leaf/
           if-no-files-found: error
 
+  runnable-test:
+    name: Test package ${{ matrix.name }}
+    needs: [plan, join-builds]
+    if: needs.join-builds.result == 'success' && needs.plan.outputs.test_count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: runnable-package-store
+          path: test-package-store
+      - name: Import and run exactly one already-built package
+        env:
+          TEST_NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          output="$(jq -er --arg name "$TEST_NAME" '.tests[$name].out' ci-plan/test-packages.json)"
+          # Same-run artifact store, not a signed public binary cache.
+          nix copy --no-check-sigs --from "file://$PWD/test-package-store" "$output"
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py run \
+            --plan ci-plan/test-packages.json --name "$TEST_NAME" \
+            --output runnable-result/evidence.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: runnable-result-${{ matrix.name }}
+          path: runnable-result/evidence.json
+          if-no-files-found: error
+
   verify:
     name: Verify all tests and dependent shipping checks
     if: always()
-    needs: [plan, shared, join-builds, test]
+    needs: [plan, shared, join-builds, test, runnable-test]
     runs-on: ubuntu-latest
     steps:
       - name: Require successful DAG predecessors
@@ -346,11 +417,18 @@ jobs:
           SHARED_STATUS: ${{ needs.shared.result }}
           LEAF_STATUS: ${{ needs.test.result }}
           BUILD_JOIN_STATUS: ${{ needs.join-builds.result }}
+          RUNNABLE_STATUS: ${{ needs.runnable-test.result }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
         run: |
           test "$PLAN_STATUS" = success
           test "$SHARED_STATUS" = success
           test "$LEAF_STATUS" = success
           test "$BUILD_JOIN_STATUS" = success
+          if [ "$TEST_COUNT" = 0 ]; then
+            test "$RUNNABLE_STATUS" = skipped
+          else
+            test "$RUNNABLE_STATUS" = success
+          fi
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
@@ -401,6 +479,15 @@ jobs:
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --stages ci-plan/stages.json --leaves dag-leaves \
             --output dag-final/evidence.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.plan.outputs.test_count != '0'
+        with:
+          pattern: runnable-result-*
+          path: runnable-evidence
+      - name: Require every discovered executable test package to pass
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
+            --plan ci-plan/test-packages.json --results runnable-evidence
       - name: Exact-head DAG evidence gate
         run: |
           python3 .ci-tools/flake-ci/lib/flake-dag-stages.py verify \

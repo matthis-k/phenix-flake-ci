@@ -26,6 +26,36 @@ def test_plan(**entries):
 
 
 class TestPackageTests(unittest.TestCase):
+    def test_build_then_test_workflow_retains_dag_and_gates_package_fanout(self):
+        source = (Path(__file__).resolve().parents[1] / ".github/workflows/flake-build-then-test.yml").read_text()
+        plan = source.split("  plan:\n", 1)[1].split("  shared:\n", 1)[0]
+        join = source.split("  join-builds:\n", 1)[1].split("  test:\n", 1)[0]
+        runnable = source.split("  runnable-test:\n", 1)[1].split("  verify:\n", 1)[0]
+        verify = source.split("  verify:\n", 1)[1]
+        self.assertIn("flake-test-packages.py plan", plan)
+        self.assertIn("steps.runnable.outputs.test_count", plan)
+        self.assertLess(join.index("flake-build-test.py join"),
+                        join.index("flake-test-packages.py build"))
+        self.assertLess(join.index("flake-test-packages.py build"), join.index("nix copy --to"))
+        self.assertIn("needs: [plan, join-builds]", runnable)
+        self.assertIn("needs.join-builds.result == 'success'", runnable)
+        self.assertIn("needs.plan.outputs.test_count != '0'", runnable)
+        self.assertIn("fail-fast: false", runnable)
+        self.assertIn("fromJSON(needs.plan.outputs.test_matrix)", runnable)
+        self.assertLess(runnable.index("nix copy --no-check-sigs --from"),
+                        runnable.index("flake-test-packages.py run"))
+        self.assertNotIn("nix build", runnable)
+        self.assertIn("needs: [plan, shared, join-builds, test, runnable-test]", verify)
+        self.assertIn('test "$RUNNABLE_STATUS" = skipped', verify)
+        self.assertIn('test "$RUNNABLE_STATUS" = success', verify)
+        self.assertIn("flake-test-packages.py verify", verify)
+        for command in ("leaf", "join", "verify"):
+            self.assertIn("flake-dag-stages.py " + command, source)
+        self.assertNotIn("id-token:", source)
+        self.assertNotIn("TS_", source)
+        self.assertNotIn("secrets: inherit", source)
+        self.assertNotIn("primary-key: remote-", source)
+
     def test_generic_name_and_quoted_nix_attribute(self):
         self.assertEqual(subject.target("x86_64-linux", "basic-smoke"),
                          '.#packages.x86_64-linux."test.basic-smoke"')
