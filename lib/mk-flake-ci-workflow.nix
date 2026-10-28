@@ -94,7 +94,12 @@ let
       fail "admission.repository must be an exact GitHub owner/repo"
     else if admission != null && (!builtins.isList admissionBranches
       || admissionBranches == [ ] || !(builtins.all safeBranch admissionBranches)
-      || admissionBranches != pushBranches) then
+      || admissionBranches != pushBranches
+      || builtins.length admissionBranches != builtins.length (
+        builtins.attrNames (builtins.listToAttrs (
+          map (branch: { name = branch; value = true; }) admissionBranches
+        ))
+      )) then
       fail "admission requires exact, nonempty branches matching pushBranches"
     else
       true;
