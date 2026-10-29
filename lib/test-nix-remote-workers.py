@@ -3,8 +3,10 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -17,6 +19,49 @@ spec.loader.exec_module(remote)
 
 
 class RemoteBuildersTest(unittest.TestCase):
+    def test_build_children_share_remote_config_and_preserve_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            machines = root / "machines"
+            machines.write_text("verified-worker\n")
+            # Execute real children, recording their environment and argv rather
+            # than only asserting the parent's subprocess.run keyword arguments.
+            recorder = root / "dag.py"
+            recorder.write_text(
+                "import json, os, sys\n"
+                "with open(os.environ['CHILD_RECORD'], 'a') as f:\n"
+                "    f.write(json.dumps([sys.argv, os.environ['NIX_CONFIG']]) + '\\n')\n")
+            packages = root / "flake-test-packages.py"
+            packages.write_text(recorder.read_text())
+            record = root / "children.jsonl"
+            args = [sys.executable, str(source), "build", "--machines", str(machines),
+                    "--dag", str(recorder), "--plan", "checks.json", "--graph", "graph.json",
+                    "--evidence", "evidence.json", "--timing", str(root / "timing.json"),
+                    "--test-packages", "tests.json", "--test-root", "roots"]
+            # Copy the actual coordinator beside the recording package helper.
+            coordinator = root / source.name
+            coordinator.write_text(source.read_text())
+            args[1] = str(coordinator)
+            env = {**os.environ, "NIX_CONFIG": "experimental-features = nix-command flakes",
+                   "CHILD_RECORD": str(record)}
+            subprocess.run(args, env=env, check=True)
+            children = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertEqual([child[0] for child in children], [
+                [str(recorder), "build", "--plan", "checks.json", "--graph", "graph.json",
+                 "--output", "evidence.json"],
+                [str(packages), "build", "--plan", "tests.json", "--root", "roots"],
+            ])
+            expected = (env["NIX_CONFIG"] + f"\nbuilders = @{machines}\nmax-jobs = 0\n"
+                        "builders-use-substitutes = true\n")
+            self.assertEqual([child[1] for child in children], [expected, expected])
+            self.assertEqual(json.loads((root / "timing.json").read_text())["workerCount"], 1)
+            packages.write_text("raise SystemExit(7)\n")
+            result = subprocess.run(args, env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exit status 7", result.stderr)
+            self.assertEqual(json.loads((root / "timing.json").read_text())["mode"],
+                             "remote-nix-ssh-ng")
+
     def test_exact_pool_names_are_disjoint(self):
         names = {remote.worker_name(38350788475, 1, count, i)
                  for count in (2, 4, 8) for i in range(1, count + 1)}
@@ -144,6 +189,10 @@ class RemoteBuildersTest(unittest.TestCase):
                     ".github/workflows/flake-nix-builders.yml").read_text()
         test_stage = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
         acceptance = workflow.split("  acceptance:\n", 1)[1]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
+        self.assertIn("--test-packages ci-plan/test-packages.json --test-root ci-result/test-package-roots",
+                      coordinator)
+        self.assertNotIn("flake-test-packages.py build", coordinator)
         self.assertIn("needs: [plan, coordinator]", test_stage)
         self.assertIn("needs.coordinator.result == 'success'", test_stage)
         self.assertIn("fromJSON(needs.plan.outputs.test_matrix)", test_stage)
