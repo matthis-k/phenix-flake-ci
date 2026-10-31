@@ -164,7 +164,8 @@ let
     ++ (if remoteSelected then [
       "      worker_count: ${toString workers}"
       "      slots_per_worker: ${toString slotsPerWorker}"
-    ] ++ (if remoteSelected && ghcrCache then [
+    ] else [ ])
+    ++ (if remoteSelected && ghcrCache then [
       "      ghcr_cache: true"
     ] else [ ]);
   secret = key: "      ${key}: " + "$" + "{{ secrets." + key + " }}";
