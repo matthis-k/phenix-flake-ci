@@ -449,3 +449,34 @@ remote execution for untrusted pull requests.
 
 See [backend configuration](docs/ci-backends.md) for a complete example,
 credential policy, local execution and verification.
+
+## Optional GitHub-native cross-PR Nix cache (GHCR)
+
+The trusted native four-builder backend can opt into `ci.trusted.remote.ghcrCache = true`.
+The generated trusted caller grants `packages: write` only when enabled;
+untrusted fork/other-author PRs retain their credential-free backend. GHCR
+is accessed using the existing workflow-scoped `GITHUB_TOKEN`: no cloud
+account, personal token or independent cache daemon is needed.
+
+The coordinator imports an existing accepted GHCR Nix closure before builds.
+After all Nix derivation checks are verified, it uploads an OCI candidate
+image containing a compressed `nix-store --export` closure. The acceptance
+job promotes the candidate digest to the cross-PR `shared-<system>-v1` tag
+**only after** all four builders, complete exact-head DAG evidence and every
+independent `test.*` package have passed. Cache misses are nonfatal; other
+GHCR errors fail the cache-enabled run. Concurrent accepted runs use last
+successful promotion; exact Nix store hashes remain the authority for reuse.
+
+The cache is an inert Docker `scratch` image and is restored using
+`nix-store --import`, never executed as a container. The first push links
+the GHCR package to the originating GitHub repository via its OCI source
+label. A package already created outside this repository may need to be
+linked before `GITHUB_TOKEN` can push it. The package has its own GitHub
+visibility controls; private packages are readable by the linked workflow.
+
+**Important tradeoff:** full closure snapshot export and OCI upload/download
+can be multi-gigabyte and can cost more time than the recompilation they
+replace. This option is **off by default** until an exact-head cold/warm
+benchmark shows net speedup. Per-run candidate tags currently remain in GHCR
+and require a retention policy before broad rollout. Do not use this design
+as a substitute for source-closure precision or Cargo compile-once packaging.

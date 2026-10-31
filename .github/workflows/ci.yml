@@ -60,6 +60,9 @@ jobs:
       - name: Test generated native Nix DAG scheduler
         run: python3 lib/test-flake-check-dag.py -v
 
+      - name: Test GHCR Nix cache provenance and final promotion policy
+        run: python3 lib/test-flake-ghcr-cache.py -v
+
       - name: Test untrusted single-store Nix DAG workflow boundaries
         run: python3 lib/test-local-dag-workflow.py -v
 
@@ -96,9 +99,10 @@ jobs:
       - name: Test actual per-shard Nix build duplication reporter
         run: python3 lib/test-shard-build-report.py -v
 
-      - name: Print exact consumer flake source identity
-        if: github.ref == 'refs/heads/main'
-        run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${GITHUB_SHA}"
+      - name: Print immutable flake source identity for main and PR consumers
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${SOURCE_SHA}"
 
       - name: Evaluate library tests
         run: nix eval --json .#lib.tests

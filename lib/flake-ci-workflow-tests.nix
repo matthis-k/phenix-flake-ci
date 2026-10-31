@@ -21,6 +21,7 @@ let
   matrixYaml = flat (render { backend = "matrix"; });
   dagYaml = flat (render { backend = "nix-dag"; });
   remoteYaml = flat (render remote);
+  ghcrYaml = flat (render (remote // { remote.ghcrCache = true; }));
   authkeyYaml = flat (render (remote // {
     remote = remote.remote // { credentials = "authkey"; };
   }));
@@ -69,6 +70,15 @@ in
     assert builtins.match ".*format.*api.tailscale.com.*" remoteYaml != null;
     assert builtins.match ".*TS_AUTHKEY.*" remoteYaml == null;
     assert builtins.match ".*pull_request:.*" remoteYaml == null;
+    true;
+
+  ghcrCacheIsOptInAndRequiresTrustedCallerPackagesWrite =
+    assert builtins.match ".*ghcr_cache: true.*" ghcrYaml != null;
+    assert builtins.match ".*packages: write.*" ghcrYaml != null;
+    assert builtins.match ".*ghcr_cache: true.*" remoteYaml == null;
+    assert builtins.match ".*packages: write.*" remoteYaml == null;
+    assert builtins.match ".*packages: write.*" dagYaml == null;
+    assert invalid (render (remote // { remote.ghcrCache = "yes"; }));
     true;
 
   remoteDefaultsToFourWorkersAndTwoSlots =

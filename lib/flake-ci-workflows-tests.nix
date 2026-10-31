@@ -28,6 +28,13 @@ let
   ownerWorkflows = make ownerPolicy;
   ownerTrusted = flat ownerWorkflows.trusted;
   ownerPr = flat ownerWorkflows.pullRequest;
+  ownerGhcrWorkflows = make (ownerPolicy // {
+    trusted = ownerPolicy.trusted // {
+      remote = ownerPolicy.trusted.remote // { ghcrCache = true; };
+    };
+  });
+  ownerGhcrTrusted = flat ownerGhcrWorkflows.trusted;
+  ownerGhcrPr = flat ownerGhcrWorkflows.pullRequest;
   values = make policy;
   flat = builtins.replaceStrings [ "\n" ] [ " " ];
   trusted = flat values.trusted;
@@ -70,6 +77,13 @@ in
     assert builtins.match ".*flake-dag-staged.yml@${sha}.*" ownerPr != null;
     assert builtins.match ".*id-token: write.*" ownerPr == null;
     assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" ownerPr == null;
+    true;
+
+  ghcrCacheOnlyAffectsTrustedCallerNotUntrustedFallback =
+    assert builtins.match ".*ghcr_cache: true.*" ownerGhcrTrusted != null;
+    assert builtins.match ".*packages: write.*" ownerGhcrTrusted != null;
+    assert builtins.match ".*ghcr_cache: true.*" ownerGhcrPr == null;
+    assert builtins.match ".*packages: write.*" ownerGhcrPr == null;
     true;
 
   nativeDefaultsAreFourBuildersAndTwoSlots =

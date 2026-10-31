@@ -9,6 +9,7 @@ on:
       slots_per_worker: { type: number, default: 2 }
       cache_namespace: { type: string, default: "" }
       cache_max_store_size_linux: { type: string, default: "6G" }
+      ghcr_cache: { type: boolean, default: false }
       artifact_namespace: { type: string, default: "" }
     secrets:
       TS_OAUTH_CLIENT_ID: { required: false }
@@ -168,6 +169,12 @@ jobs:
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
+      - name: Restore previously accepted shared Nix closure from GHCR
+        if: ${{ inputs.ghcr_cache }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-ghcr-cache.py restore --plan ci-plan/plan.json
       - name: Name coordinator uniquely for this invocation
         id: node
         run: echo "hostname=fc-${{ github.run_id }}-${{ github.run_attempt }}-n${{ inputs.worker_count }}-ctl" >> "$GITHUB_OUTPUT"
@@ -214,6 +221,20 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json
+      - name: Stage exact-head Nix closure as GHCR candidate
+        if: ${{ inputs.ghcr_cache }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-ghcr-cache.py stage \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --evidence ci-result/evidence.json --output ci-ghcr-stage/metadata.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ inputs.ghcr_cache }}
+        with:
+          name: ghcr-nix-candidate-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-ghcr-stage/metadata.json
+          if-no-files-found: error
       - name: Publish verified outputs to shared Nix store (trusted runs only)
         if: ${{ github.event_name != 'pull_request' && vars.NIX_BINARY_CACHE_DESTINATION != '' }}
         env:
@@ -338,3 +359,15 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
             --plan ci-plan/test-packages.json --results runnable-evidence
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.ghcr_cache }}
+        with:
+          name: ghcr-nix-candidate-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-ghcr-stage/
+      - name: Promote GHCR cache only after all check and runnable-test gates
+        if: ${{ inputs.ghcr_cache }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-ghcr-cache.py promote \
+            --plan ci-plan/plan.json --metadata ci-ghcr-stage/metadata.json
