@@ -70,7 +70,8 @@ def restore(args):
             return
         raise RuntimeError("GHCR Nix cache pull failed (not a cache miss): " + error[-1200:])
     with tempfile.TemporaryDirectory(prefix="phenix-ghcr-restore-") as temp:
-        container = run("docker", "create", ref, text=True, capture_output=True).stdout.strip()
+        # The OCI image is FROM scratch with no CMD; create an unstarted container.
+        container = run("docker", "create", ref, "/never-start", text=True, capture_output=True).stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{12,64}", container):
             raise ValueError("invalid docker container identity")
         archive = Path(temp) / "closure.nar.zst"
