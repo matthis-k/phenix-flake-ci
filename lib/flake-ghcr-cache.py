@@ -24,7 +24,8 @@ FORMAT = "phenix.ghcr-nix-cache.v1"
 
 
 def identity(repository, system):
-    if not REPO.fullmatch(repository) or not SYSTEM.fullmatch(system):
+    if (".." in repository or repository.startswith(".") or "/." in repository
+            or not REPO.fullmatch(repository) or not SYSTEM.fullmatch(system)):
         raise ValueError("invalid repository or Nix system for GHCR cache")
     return ("ghcr.io/" + repository.lower().replace("/", "/") + "-nix-cache",
             "shared-" + system + "-v1")
