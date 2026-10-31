@@ -60,6 +60,9 @@ jobs:
       - name: Test generated native Nix DAG scheduler
         run: python3 lib/test-flake-check-dag.py -v
 
+      - name: Test GHCR Nix cache provenance and final promotion policy
+        run: python3 lib/test-flake-ghcr-cache.py -v
+
       - name: Test untrusted single-store Nix DAG workflow boundaries
         run: python3 lib/test-local-dag-workflow.py -v
 
