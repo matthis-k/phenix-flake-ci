@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SYSTEM = re.compile(r"[a-z0-9_+-]+\Z")
@@ -59,6 +60,7 @@ def resolve_inputs(args):
 
 
 def restore(args):
+    begin = time.monotonic()
     plan, repo, image, stable = resolve_inputs(args)
     login()
     ref = image + ":" + stable
@@ -85,10 +87,11 @@ def restore(args):
             unpack_rc = unpack.wait()
         if imported.returncode or unpack_rc:
             raise RuntimeError("GHCR Nix archive import failed")
-    print("GHCR Nix cache: restored verified prior snapshot")
+    print(f"GHCR Nix cache: restored accepted snapshot in {time.monotonic()-begin:.1f}s")
 
 
 def stage(args):
+    begin = time.monotonic()
     plan, repo, image, stable = resolve_inputs(args)
     run(sys.executable, str(Path(__file__).with_name("flake-check-dag.py")),
         "verify", "--plan", args.plan, "--graph", args.graph, "--evidence", args.evidence)
@@ -119,6 +122,7 @@ def stage(args):
             raise RuntimeError("Nix closure export/compression failed")
         # Building FROM scratch preserves the Nix export as an inert OCI layer.
         # It is never executed as a container. All cache use is via nix-store --import.
+        archive_bytes = archive.stat().st_size
         (temp_dir / "Dockerfile").write_text(
             "FROM scratch\n"
             + "LABEL org.opencontainers.image.source=https://github.com/" + repo + "\n"
@@ -135,11 +139,11 @@ def stage(args):
     metadata = dict(format=FORMAT, repository=repo, image=image, system=plan["system"],
                     commit=plan["commit"], plan_digest=plan["digest"], run_id=run_id,
                     attempt=attempt, candidate=tag, digest=digest, stable=stable,
-                    output_count=len(outputs))
+                    output_count=len(outputs), compressed_bytes=archive_bytes)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(metadata, sort_keys=True) + "\n")
-    print("GHCR Nix cache: staged exact-head closure; awaiting final test acceptance")
+    print(f"GHCR Nix cache: staged {archive_bytes/2**20:.1f} MiB in {time.monotonic()-begin:.1f}s; awaiting final test acceptance")
 
 
 def promote(args):
