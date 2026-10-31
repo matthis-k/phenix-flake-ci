@@ -24,6 +24,7 @@ let
   workers = remote.workers or 4;
   slotsPerWorker = remote.slotsPerWorker or 2;
   credentials = remote.credentials or "oidc";
+  ghcrCache = remote.ghcrCache or false;
   pullRequest = events.pullRequest or (backend != "nix-remote");
   pushBranches = events.pushBranches or [ "main" ];
   workflowDispatch = events.workflowDispatch or true;
@@ -89,10 +90,12 @@ let
       fail "ci must contain only backend and remote"
     else if !builtins.isString backend || !(builtins.elem backend [ "matrix" "nix-dag" "nix-remote" ]) then
       fail "backend must be matrix, nix-dag or nix-remote"
-    else if !isAttrs remote || !keysWithin remote [ "transport" "workers" "slotsPerWorker" "credentials" ] then
-      fail "remote must contain only transport, workers, slotsPerWorker and credentials"
+    else if !isAttrs remote || !keysWithin remote [ "transport" "workers" "slotsPerWorker" "credentials" "ghcrCache" ] then
+      fail "remote must contain only transport, workers, slotsPerWorker, credentials and ghcrCache"
     else if !remoteSelected && remote != { } then
       fail "remote options require backend = nix-remote"
+    else if !builtins.isBool ghcrCache then
+      fail "remote.ghcrCache must be boolean"
     else if remoteSelected && transport != "tailscale" then
       fail "only the Tailscale remote transport is supported"
     else if remoteSelected && (!builtins.isInt workers || workers < 1 || workers > 16) then
@@ -161,6 +164,8 @@ let
     ++ (if remoteSelected then [
       "      worker_count: ${toString workers}"
       "      slots_per_worker: ${toString slotsPerWorker}"
+    ] ++ (if remoteSelected && ghcrCache then [
+      "      ghcr_cache: true"
     ] else [ ]);
   secret = key: "      ${key}: " + "$" + "{{ secrets." + key + " }}";
   remoteSecrets =
@@ -193,6 +198,7 @@ let
     ++ concurrencyLines
     ++ [ "" "permissions:" "  contents: read" ]
     ++ (if remoteSelected then [ "  id-token: write" ] else [ ])
+    ++ (if remoteSelected && ghcrCache then [ "  packages: write" ] else [ ])
     ++ [
       ""
       "jobs:"
