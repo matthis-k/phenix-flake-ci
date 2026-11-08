@@ -83,6 +83,13 @@ jobs:
           nix run --no-write-lock-file './tests/cargo-test-consumer#packages.x86_64-linux."test.cargo-generic-cargo-child"'
           test -s "$test_package/cargo-tests.json"
           test -d "$test_package/libexec"
+          # A matrix prebuild can refer to the exact compiled test corpus
+          # rather than choosing an arbitrary per-crate wrapper.
+          shared="$(nix build --no-write-lock-file --no-link --print-out-paths \
+            './tests/cargo-test-consumer#packages.x86_64-linux.cargo-workspace-tests')"
+          wrapper="$(nix build --no-write-lock-file --no-link --print-out-paths \
+            './tests/cargo-test-consumer#packages.x86_64-linux."test.cargo-generic-cargo-child"')"
+          nix path-info --recursive "$wrapper" | grep -Fx "$shared"
 
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
