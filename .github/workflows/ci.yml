@@ -80,6 +80,8 @@ jobs:
 
       - name: Build and execute Cargo fixture after artifact compilation
         run: |
+          set -euo pipefail
+          fixture=./tests/cargo-test-consumer
           test_package="$(nix build --no-write-lock-file --no-link --print-out-paths ./tests/cargo-test-consumer)"
           nix run --no-write-lock-file ./tests/cargo-test-consumer
           nix run --no-write-lock-file './tests/cargo-test-consumer#packages.x86_64-linux."test.cargo-generic-cargo-test-fixture"'
