@@ -213,7 +213,7 @@ def build_command(args):
         # reuse the same strict parser as the full-DAG backend.
         targets = [f".#checks.{plan['system']}.{name}" for name in shard["checks"]]
         raw = subprocess.check_output(
-            ["nix", "build", "--no-link", "--json", "-L", *targets], text=True,
+            ["nix", "build", "--log-format", "raw", "--no-link", "--json", "-L", *targets], text=True,
         )
         results = json.loads(raw)
         expected = {plan["checks"][name] for name in shard["checks"]}
@@ -268,7 +268,7 @@ def prebuild_command(args):
         # Nix creates numbered out-links for multiple installables.
         root = Path(args.output).parent / "shared-prebuild-root"
         root.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["nix", "build", "--out-link", str(root), "-L", *targets], check=True)
+        subprocess.run(["nix", "build", "--log-format", "raw", "--out-link", str(root), "-L", *targets], check=True)
     results = {}
     for target in targets:
         # Read realized store identity only after the combined build. This

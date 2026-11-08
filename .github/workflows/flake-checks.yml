@@ -103,11 +103,14 @@ jobs:
           set -euo pipefail
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild \
             --plan ci-plan/plan.json --output ci-plan/prebuild.json \
-            --gc-roots-dir "${RUNNER_TEMP}/phenix-shared-prebuild-roots"
+            --gc-roots-dir "${RUNNER_TEMP}/phenix-shared-prebuild-roots" \
+            2>&1 | tee ci-plan/prebuild-build.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flake-prebuild-evidence
-          path: ci-plan/prebuild.json
+          path: |
+            ci-plan/prebuild.json
+            ci-plan/prebuild-build.log
           if-no-files-found: error
 
   shard:
@@ -216,14 +219,16 @@ jobs:
           done < <(jq -r '.shards[].id' ci-plan/plan.json)
           # The preceding evidence gate proves all shards succeeded. Zero local
           # builds is therefore a valid fully cached result, not missing data.
-          python3 lib/shard-build-report.py --allow-zero-builds "${args[@]}" \
+          test -f ci-plan/prebuild-build.log || { echo "Missing prebuild log" >&2; exit 1; }
+          python3 lib/shard-build-report.py --allow-zero-builds \
+            --prebuild-log ci-plan/prebuild-build.log "${args[@]}" \
             > ci-evidence/duplicate-builds.json
           cat ci-evidence/duplicate-builds.json
           {
             echo "### Nix derivation build reuse across shards"
             echo "| Metric | Count |"
             echo "| --- | ---: |"
-            jq -r '"| Direct build events | \(.build_events) |", "| Unique derivations built | \(.distinct_derivation_paths) |", "| Rebuilt across shards | \(.repeated_events_across_shards) |", "| Repeated within a shard | \(.repeated_events_within_a_shard) |"' ci-evidence/duplicate-builds.json
+            jq -r '"| Shard build events | \\(.build_events) |", "| Prebuild events | \\(.prebuild_build_events) |", "| Unique derivations (pipeline) | \\(.pipeline_distinct_derivation_paths) |", "| Rebuilt after prebuild | \\(.repeated_events_after_prebuild) |", "| Rebuilt across shards | \\(.repeated_events_across_shards) |", "| Repeated events (pipeline) | \\(.pipeline_repeated_build_events) |"' ci-evidence/duplicate-builds.json
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

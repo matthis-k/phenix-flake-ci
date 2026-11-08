@@ -80,11 +80,15 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
         source = (ROOT / ".github" / "workflows" / "flake-checks.yml").read_text()
         shard = source.split("  shard:\n", 1)[1].split("  result:\n", 1)[0]
         result = source.split("  result:\n", 1)[1]
+        prebuild = source.split("  prebuild:\n", 1)[1].split("  shard:\n", 1)[0]
+        self.assertIn("2>&1 | tee ci-plan/prebuild-build.log", prebuild)
+        self.assertIn("ci-plan/prebuild-build.log", prebuild)
         self.assertIn("2>&1 | tee ci-evidence/build.log", shard)
         self.assertIn("path: ci-evidence/", shard)
         self.assertIn("if: always()", source)
         verify = result.index("python3 lib/flake-check-plan.py verify")
         report = result.index("python3 lib/shard-build-report.py --allow-zero-builds")
+        self.assertIn("--prebuild-log ci-plan/prebuild-build.log", result)
         self.assertLess(verify, report, "must authenticate success before allowing zero builds")
         self.assertIn('test -f "$log"', result, "missing shard logs must fail closed")
         self.assertIn('name: flake-duplicate-builds', result)

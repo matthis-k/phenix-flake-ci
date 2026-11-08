@@ -174,7 +174,7 @@ class TestFlakeChecks(unittest.TestCase):
                 planner.build_command(args)
             expected = [".#checks.x86_64-linux." + name for name in shard["checks"]]
             build.assert_called_once_with(
-                ["nix", "build", "--no-link", "--json", "-L", *expected],
+                ["nix", "build", "--log-format", "raw", "--no-link", "--json", "-L", *expected],
                 text=True)
             evidence = json.loads((root / "evidence.json").read_text())
             self.assertEqual(evidence["status"], "pass")
@@ -205,7 +205,7 @@ class TestFlakeChecks(unittest.TestCase):
                     planner, "run_command", side_effect=fake_command) as command:
                 planner.prebuild_command(args)
             build.assert_called_once_with(
-                ["nix", "build", "--out-link", str(root / "shared-prebuild-root"), "-L",
+                ["nix", "build", "--log-format", "raw", "--out-link", str(root / "shared-prebuild-root"), "-L",
                  ".#kernel", ".#shared-plugin"],
                 check=True)
             self.assertEqual(command.call_count, 3)
@@ -238,7 +238,7 @@ class TestFlakeChecks(unittest.TestCase):
             # One root per distinct output, not one per alias/target.
             self.assertEqual(proc.call_count, 2)
             self.assertEqual(proc.call_args_list[0], mock.call(
-                ["nix", "build", "--out-link", str(root / "shared-prebuild-root"),
+                ["nix", "build", "--log-format", "raw", "--out-link", str(root / "shared-prebuild-root"),
                  "-L", ".#kernel", ".#shared-plugin"],
                 check=True,
             ))
