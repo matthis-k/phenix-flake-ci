@@ -20,6 +20,7 @@ let
   };
   matrixYaml = flat (render { backend = "matrix"; });
   dagYaml = flat (render { backend = "nix-dag"; });
+  localYaml = flat (render { backend = "nix-local"; });
   remoteYaml = flat (render remote);
   authkeyYaml = flat (render (remote // {
     remote = remote.remote // { credentials = "authkey"; };
@@ -39,6 +40,27 @@ in
   nativeDagUsesSameCheckPlan =
     assert builtins.match ".*flake-dag-staged.yml@${sha}.*" dagYaml != null;
     assert builtins.match ".*config: \"ci/flake-check-config.nix\".*" dagYaml != null;
+    true;
+
+  singleStorePrIsPinnedCredentialFreeAndPrOnlyByDefault =
+    assert builtins.match ".*flake-local-dag.yml@${sha}.*" localYaml != null;
+    assert builtins.match ".*config: \\"ci/flake-check-config.nix\\".*" localYaml != null;
+    assert builtins.match ".*pull_request:.*" localYaml != null;
+    assert builtins.match ".*push:.*" localYaml == null;
+    assert builtins.match ".*workflow_dispatch:.*" localYaml == null;
+    assert builtins.match ".*id-token: write.*" localYaml == null;
+    assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" localYaml == null;
+    true;
+
+  singleStoreExplicitPushMayBeRequested =
+    let
+      generated = flat (mkWorkflow (base // {
+        ci.backend = "nix-local";
+        events = { pullRequest = false; pushBranches = [ "main" ]; workflowDispatch = false; };
+      }));
+    in
+    assert builtins.match ".*push:.*" generated != null;
+    assert builtins.match ".*pull_request:.*" generated == null;
     true;
 
   nativePrCancellationIsScopedAndMainRunsRemainIndependent =
