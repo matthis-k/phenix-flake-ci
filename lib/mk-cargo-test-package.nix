@@ -37,9 +37,12 @@ pkgs.rustPlatform.buildRustPackage {
     # the writable unpack tree. Cargo runs in the original immutable source
     # to preserve CARGO_MANIFEST_DIR for fixtures, so pass that config
     # explicitly. Its @vendor@ placeholder was substituted by Nix already.
-    vendor_config="$PWD/.cargo/config.toml"
+    # stdenv may run the build hook from $NIX_BUILD_TOP rather than the
+    # unpacked source root; cargoSetupPostUnpackHook wrote this file within
+    # $sourceRoot, not necessarily the current working directory.
+    vendor_config="${NIX_BUILD_TOP:-$TMPDIR}/${sourceRoot}/.cargo/config.toml"
     if [ ! -f "$vendor_config" ]; then
-      echo "missing Nix-generated offline Cargo vendor configuration" >&2
+      echo "missing Nix-generated offline Cargo vendor configuration: $vendor_config" >&2
       exit 1
     fi
     cd ${src}
