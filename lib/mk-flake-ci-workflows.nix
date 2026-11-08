@@ -36,8 +36,8 @@ let
       fail "pullRequest CI accepts only backend"
     else if (trusted.backend or "nix-remote") != "nix-remote" then
       fail "trusted workflow must use the native Nix remote scheduler"
-    else if !(builtins.elem prBackend [ "nix-dag" "matrix" ]) then
-      fail "untrusted pull requests must use nix-dag or matrix"
+    else if !(builtins.elem prBackend [ "nix-dag" "matrix" "nix-local" ]) then
+      fail "untrusted pull requests must use nix-dag, matrix or nix-local"
     else if !builtins.isBool workflowDispatch then
       fail "trusted.workflowDispatch must be boolean"
     else if !builtins.isList prAuthors then
