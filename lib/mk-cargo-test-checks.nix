@@ -100,10 +100,18 @@ let
       mkdir -p "$out"
     ''
   ) checked;
-  packages = builtins.listToAttrs (map (profile: {
-    name = "cargo-tests-${profile}";
-    value = compiled.${profile};
-  }) usedProfiles);
+  packages = builtins.listToAttrs (lib.concatMap (profile: [
+    {
+      name = "cargo-tests-${profile}";
+      value = compiled.${profile};
+    }
+    {
+      # Ordinary package alias consumed by generic planner autoPrebuild.
+      # Both names refer to exactly one immutable compiled corpus derivation.
+      name = "ci-prebuild-cargo-tests-${profile}";
+      value = compiled.${profile};
+    }
+  ]) usedProfiles);
   prebuildTargets = map (
     profile: ".#packages.${pkgs.stdenv.hostPlatform.system}.cargo-tests-${profile}"
   ) usedProfiles;

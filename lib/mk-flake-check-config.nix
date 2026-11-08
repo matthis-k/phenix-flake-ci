@@ -7,6 +7,7 @@
   ci ? null,
   checkHints ? { },
   prebuildTargets ? [ ],
+  autoPrebuild ? false,
   cache ? {
     keyPrefix = "flake-checks";
     keyFiles = [ "flake.lock" ];
@@ -23,6 +24,8 @@ let
       fail "flake strategy and checkHints must be attribute sets"
     else if !builtins.isList prebuildTargets || !(builtins.all builtins.isString prebuildTargets) then
       fail "flake prebuildTargets must be a list of Nix installables"
+    else if !builtins.isBool autoPrebuild then
+      fail "autoPrebuild must be boolean"
     else if !(builtins.isAttrs cache) then
       fail "flake cache must be an attribute set"
     else if ci != null && !builtins.isAttrs ci then
@@ -33,7 +36,7 @@ in
 assert valid;
 {
   schemaVersion = 1;
-  inherit system shardCount cache;
+  inherit system shardCount cache autoPrebuild;
   strategy = strategy.id or "generic";
   strategyOptions = builtins.removeAttrs strategy [ "id" "checkHints" "prebuildTargets" ];
   checkHints = (strategy.checkHints or { }) // checkHints;

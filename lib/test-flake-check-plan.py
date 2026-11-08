@@ -23,6 +23,26 @@ def checks(*names):
 
 
 class TestFlakeChecks(unittest.TestCase):
+    def test_generic_prebuild_discovery_and_dedup(self):
+        names = ["default", "ci-prebuild-cargo-tests-no-default",
+                 "ci-prebuild-cargo-tests-default"]
+        with mock.patch.object(planner, "run_command",
+                               return_value=json.dumps(names)) as call:
+            found = planner.discover_prebuild_packages(".", "x86_64-linux")
+        self.assertEqual(found, [
+            ".#packages.x86_64-linux.ci-prebuild-cargo-tests-default",
+            ".#packages.x86_64-linux.ci-prebuild-cargo-tests-no-default",
+        ])
+        self.assertIn("builtins.attrNames", call.call_args.args[0])
+        with mock.patch.object(planner, "run_command", return_value='["../bad"]'):
+            with self.assertRaisesRegex(ValueError, "package name"):
+                planner.discover_prebuild_packages(".", "x86_64-linux")
+
+    def test_auto_prebuild_is_only_an_explicit_opt_in(self):
+        with self.assertRaisesRegex(ValueError, "autoPrebuild"):
+            planner.make_plan(checks("a"), {**CONFIG, "autoPrebuild": "yes"}, SHA)
+        self.assertEqual(planner.make_plan(checks("a"), CONFIG, SHA)["prebuildTargets"], [])
+
     def test_new_check_enters_exact_inventory(self):
         a = planner.make_plan(checks("a", "b"), CONFIG, SHA)
         b = planner.make_plan(checks("a", "b", "new"), CONFIG, SHA)

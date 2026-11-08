@@ -130,3 +130,9 @@ when a project needs explicit suites. The check names are ordinary Nix
 attribute names, so the existing generic scheduler and cache continue to work.
 
 The integration fixture includes registry dependencies (`proc-macro2` and `unicode-ident`) and checks offline vendoring from the immutable source directory. This regression prevents Cargo from silently falling back to network access.
+
+## Generic automatic prebuild discovery
+
+Set `autoPrebuild = true;` in the consumer's Flake CI check configuration. The generic planner reads only the names of ordinary `packages.<system>` outputs, then automatically includes every `ci-prebuild-*` package as a prebuild target. The Cargo adapter exports each compiled profile with that prefix as an alias of the same derivation. This removes the separate manually-maintained `prebuildTargets` list from the consumer and applies to other language adapters equally.
+
+The opt-in is explicit and defaults to false. In non-matrix backends it only augments the plan; a single-store Nix scheduler still builds each referenced derivation once. Package names are discovered without building them. Nonconforming names cause planning to fail instead of silently selecting arbitrary targets.
