@@ -120,17 +120,17 @@ def build_command(args):
     verify_head(plan)
     tests = plan["tests"]
     if tests:
+        # Evaluate the entire inventory once. Checking both drvPath and
+        # outPath catches changed identities and new/removed test packages.
+        # The former per-package nix eval loop scaled linearly with tests
+        # and checked only the output path.
+        if discover_inventory(plan["system"]) != tests:
+            raise ValueError("runnable test inventory no longer matches the exact-head plan")
         roots = [target(plan["system"], name) for name in tests]
         # The symlink keeps exactly the executable test output closures live
         # until the shared coordinator's cache-saving post-job hook.
         subprocess.run(["nix", "build", "-L", "--out-link", args.root,
                         *roots], check=True)
-        for name, entry in tests.items():
-            resolved = subprocess.check_output(
-                ["nix", "eval", "--raw", "--apply", "p: p.outPath",
-                 target(plan["system"], name)], text=True).strip()
-            if resolved != entry["out"]:
-                raise ValueError(f"test package {name} no longer matches its derivation")
         # The Nix build exit status proves every root was realized.
         expected = sorted(set(item["out"] for item in tests.values()))
         actual = subprocess.check_output(
