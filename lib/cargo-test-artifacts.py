@@ -53,7 +53,30 @@ def install(input_file, output, metadata_file):
             raise ValueError("invalid Cargo metadata package")
         if entry.get("id") in workspace:
             names[entry["id"]] = entry["name"]
-    selected = executables(input_file.read_text().splitlines())
+    artifact_lines = input_file.read_text().splitlines()
+    selected = executables(artifact_lines)
+    target_kinds = {}
+    for line in artifact_lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (not isinstance(record, dict)
+                or record.get("reason") != "compiler-artifact"
+                or not isinstance(record.get("executable"), str)
+                or not record["executable"]
+                or not isinstance(record.get("profile"), dict)
+                or record["profile"].get("test") is not True):
+            continue
+        target = record.get("target")
+        if not isinstance(target, dict):
+            continue
+        kinds = target.get("kind")
+        if not isinstance(kinds, list) or not kinds or not all(
+                isinstance(kind, str) and kind for kind in kinds):
+            raise ValueError("Cargo test artifact lacks its target kind")
+        target_kinds[(record.get("package_id"), target.get("name"),
+                      record["executable"])] = tuple(kinds)
     manifest = []
     for index, ((package, name, source), binary) in enumerate(selected):
         crate = names.get(package)
@@ -69,7 +92,8 @@ def install(input_file, output, metadata_file):
         shutil.copy2(binary, destination)
         destination.chmod(0o555)
         manifest.append({"package": crate, "packageId": package,
-                         "target": name, "binary": f"{crate}/{destination.name}"})
+                         "target": name, "targetKinds": list(target_kinds[package, name, source]),
+                         "binary": f"{crate}/{destination.name}"})
     (output.parent / "cargo-tests.json").write_text(
         json.dumps(manifest, sort_keys=True, indent=2) + "\n")
     print(f"Packaged {len(manifest)} already-compiled Cargo test executables "
