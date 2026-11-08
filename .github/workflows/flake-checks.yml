@@ -157,13 +157,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ci-evidence
+          # Preserve direct Nix build events without hiding build failures.
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py build \
-            --plan ci-plan/plan.json --shard "$SHARD" --output ci-evidence/evidence.json
+            --plan ci-plan/plan.json --shard "$SHARD" --output ci-evidence/evidence.json \
+            2>&1 | tee ci-evidence/build.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: flake-shard-${{ matrix.id }}
-          path: ci-evidence/evidence.json
+          path: ci-evidence/
           if-no-files-found: error
 
   result:
@@ -202,3 +204,29 @@ jobs:
           test "$SHARD_STATUS" = success
           python3 lib/flake-check-plan.py verify --plan ci-plan/plan.json \
             --prebuild ci-plan/prebuild.json --directory ci-evidence
+      - name: Report Nix derivations rebuilt across shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r shard; do
+            log="ci-evidence/flake-shard-${shard}/build.log"
+            test -f "$log" || { echo "Missing successful shard build log: $log" >&2; exit 1; }
+            args+=(--shard "${shard#shard-}=$log")
+          done < <(jq -r '.shards[].id' ci-plan/plan.json)
+          # The preceding evidence gate proves all shards succeeded. Zero local
+          # builds is therefore a valid fully cached result, not missing data.
+          python3 lib/shard-build-report.py --allow-zero-builds "${args[@]}" \
+            > ci-evidence/duplicate-builds.json
+          cat ci-evidence/duplicate-builds.json
+          {
+            echo "### Nix derivation build reuse across shards"
+            echo "| Metric | Count |"
+            echo "| --- | ---: |"
+            jq -r '"| Direct build events | \\(.build_events) |", "| Unique derivations built | \\(.distinct_derivation_paths) |", "| Rebuilt across shards | \\(.repeated_events_across_shards) |", "| Repeated within a shard | \\(.repeated_events_within_a_shard) |"' ci-evidence/duplicate-builds.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flake-duplicate-builds
+          path: ci-evidence/duplicate-builds.json
+          if-no-files-found: error
