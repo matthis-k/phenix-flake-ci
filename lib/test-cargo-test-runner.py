@@ -46,8 +46,12 @@ class CargoCheckRunnerTests(unittest.TestCase):
                 runner.choose(records, binaries, {"typo"}, False, set())
             with self.assertRaisesRegex(ValueError, "unknown integration test targets"):
                 runner.choose(records, binaries, {"root"}, False, {"not-a-test"})
+            no_child_lib = [
+                {**record, "targetKinds": ["test"]} if record["package"] == "child"
+                else record for record in records
+            ]
             with self.assertRaisesRegex(ValueError, "requested lib"):
-                runner.choose(records, binaries, {"child"}, True, set())
+                runner.choose(no_child_lib, binaries, {"child"}, True, set())
 
     def test_refuses_binary_escape_and_duplicate_paths(self):
         with tempfile.TemporaryDirectory() as temp:
