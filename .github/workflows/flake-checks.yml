@@ -223,7 +223,7 @@ jobs:
             echo "### Nix derivation build reuse across shards"
             echo "| Metric | Count |"
             echo "| --- | ---: |"
-            jq -r '"| Direct build events | \\(.build_events) |", "| Unique derivations built | \\(.distinct_derivation_paths) |", "| Rebuilt across shards | \\(.repeated_events_across_shards) |", "| Repeated within a shard | \\(.repeated_events_within_a_shard) |"' ci-evidence/duplicate-builds.json
+            jq -r '"| Direct build events | \(.build_events) |", "| Unique derivations built | \(.distinct_derivation_paths) |", "| Rebuilt across shards | \(.repeated_events_across_shards) |", "| Repeated within a shard | \(.repeated_events_within_a_shard) |"' ci-evidence/duplicate-builds.json
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
