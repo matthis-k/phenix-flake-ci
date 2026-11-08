@@ -44,7 +44,7 @@ in
 
   singleStorePrIsPinnedCredentialFreeAndPrOnlyByDefault =
     assert builtins.match ".*flake-local-dag.yml@${sha}.*" localYaml != null;
-    assert builtins.match ".*config: \\"ci/flake-check-config.nix\\".*" localYaml != null;
+    assert builtins.match ".*config: \"ci/flake-check-config.nix\".*" localYaml != null;
     assert builtins.match ".*pull_request:.*" localYaml != null;
     assert builtins.match ".*push:.*" localYaml == null;
     assert builtins.match ".*workflow_dispatch:.*" localYaml == null;
