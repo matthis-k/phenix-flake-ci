@@ -18,6 +18,7 @@
         inherit pkgs;
         src = ./.;
         lockFile = ./Cargo.lock;
+        exposeCompiled = true;
       };
     };
 }
