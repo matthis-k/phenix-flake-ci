@@ -1,0 +1,73 @@
+# Reuse Cargo compilation across Nix check groups
+
+Separate Nix derivations that each invoke \`cargo test\` compile the same
+Rust crates repeatedly even when Nix schedules derivations only once.
+Single-store scheduling cannot deduplicate **different** derivations.
+
+\`mkCargoTestChecks\` compiles all test executables **once per compatible
+Cargo profile**. Every named check is a small Nix derivation executing selected
+already-built binaries without Cargo. It returns ordinary \`checks\` and
+\`packages\`; the generic planner still discovers all checks from
+\`checks.<system>\` and works unchanged with matrix, local DAG and remote DAG.
+
+\`\`\`nix
+let
+  cargo = phenix-flake-ci.lib.mkCargoTestChecks {
+    inherit pkgs;
+    src = ./.;
+    lockFile = ./Cargo.lock;
+    groups = {
+      storage.packages = [ "phenix-storage" "phenix-schema" ];
+      graph.packages = [ "phenix-graph" "phenix-plugin" ];
+      kernel = {
+        packages = [ "phenix-kernel" ];
+        targets = { lib = true; tests = [ "kernel" "scoped_storage" ]; };
+      };
+      derived = {
+        packages = [ "phenix-storage-graph" ];
+        targets.tests = [ "derived" "derived_plugins" ];
+      };
+      "no-default".profile = "no-default";
+    };
+  };
+in {
+  checks.${system} = { /* other checks */ } // cargo.checks;
+  packages.${system} = { /* other packages */ } // cargo.packages;
+}
+\`\`\`
+
+Default compilation uses \`cargo test --workspace --all-targets --no-run\`.
+The optional \`no-default\` profile uses \`cargo test --workspace
+--no-default-features --lib --tests --no-run\`. Only profiles referenced by a
+group are built. Supply custom named profiles explicitly via \`profiles\`;
+profile selections are never implicitly merged.
+
+A group without \`packages\` selects all workspace packages; without
+\`targets\`, it executes all compiled test targets for those packages.
+\`targets.lib = true\` selects library unit tests;
+\`targets.tests = [ "integration_name" ];\` selects integration binaries.
+Unknown packages and test names fail closed. All selected test binaries are
+attempted even if a previous binary failed.
+
+The helper exposes \`prebuildTargets\` for its compiler profiles (for example
+\`.#packages.x86_64-linux.cargo-tests-default\`). Matrix consumers put those
+ordinary Nix installables into \`ci/flake-check-config.nix\`'s
+\`prebuildTargets\` field for shared cache publication. Single-store DAG
+backends need no separate prebuild: their check derivations naturally share
+the same corpus dependency.
+
+## Ownership and limits
+
+- Core CI owns scheduling, caching and exact-head acceptance. The Cargo
+  adapter owns compilation and binary selection; the consumer owns the
+  semantic groups and feature/profile boundaries.
+- One workspace-wide compilation unifies Cargo feature resolution relative
+  to per-crate test invocations; preserve old checks until parity is verified.
+- Whole-workspace compilation broadens source invalidation. Narrowing the
+  source filter later must retain manifests, lockfile, and test fixtures.
+- \`cargo test --no-run\` cannot run doctests. Use a separate doctest check
+  where shipping requires documentation tests.
+- Clippy and release smoke use different compiler flags and should not be
+  claimed as interchangeable with test binaries.
+- Groups can deliberately overlap; for zero duplicate execution, assign
+  each test target to only one group.

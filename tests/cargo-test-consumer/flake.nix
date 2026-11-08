@@ -7,7 +7,30 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      cargo = phenix-flake-ci.lib.mkCargoTestChecks {
+        inherit pkgs;
+        src = ./.;
+        lockFile = ./Cargo.lock;
+        groups = {
+          root = {
+            packages = [ "generic-cargo-test-fixture" ];
+            targets.lib = true;
+          };
+          child = {
+            packages = [ "generic-cargo-child" ];
+            targets.lib = true;
+          };
+          integration = {
+            packages = [ "generic-cargo-test-fixture" ];
+            targets.tests = [ "basic_integration" ];
+          };
+          "no-default" = {
+            profile = "no-default";
+          };
+        };
+      };
     in {
+      checks.${system} = cargo.checks;
       packages.${system} = {
         default = phenix-flake-ci.lib.mkCargoTestPackage {
           inherit pkgs;
@@ -19,6 +42,6 @@
         src = ./.;
         lockFile = ./Cargo.lock;
         exposeCompiled = true;
-      };
+      } // cargo.packages;
     };
 }

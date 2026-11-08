@@ -72,6 +72,9 @@ jobs:
       - name: Test generic executable test package discovery and evidence
         run: python3 lib/test-flake-test-packages.py -v
 
+      - name: Test generic precompiled Cargo group selection
+        run: python3 lib/test-cargo-test-runner.py -v
+
       - name: Test Cargo precompiled executable packaging
         run: python3 lib/test-cargo-test-artifacts.py -v
 
@@ -90,6 +93,18 @@ jobs:
           wrapper="$(nix build --no-write-lock-file --no-link --print-out-paths \
             './tests/cargo-test-consumer#packages.x86_64-linux."test.cargo-generic-cargo-child"')"
           nix path-info --recursive "$wrapper" | grep -Fx "$shared"
+          # Named checks share one Nix corpus per Cargo feature profile.
+          nix build --no-write-lock-file --no-link \
+            "$fixture#checks.x86_64-linux.root" \
+            "$fixture#checks.x86_64-linux.child" \
+            "$fixture#checks.x86_64-linux.integration" \
+            "$fixture#checks.x86_64-linux.no-default"
+          main_corpus="$(nix build --no-write-lock-file --no-link --print-out-paths \
+            "$fixture#packages.x86_64-linux.cargo-tests-default")"
+          no_default_corpus="$(nix build --no-write-lock-file --no-link --print-out-paths \
+            "$fixture#packages.x86_64-linux.cargo-tests-no-default")"
+          test -n "$main_corpus" && test -n "$no_default_corpus"
+          test "$main_corpus" != "$no_default_corpus"
 
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
