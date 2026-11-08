@@ -149,12 +149,12 @@ else:
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
         args = type("Args", (), {"plan": "planned.json", "root": "/tmp/test-roots"})()
         expected_outputs = {entry["out"] for entry in plan["tests"].values()}
-        with mock.patch.object(subject, "load", return_value=plan), \\
-                mock.patch.object(subject, "verify_head"), \\
-                mock.patch.object(subject, "discover_inventory", return_value=plan["tests"]) as discover, \\
-                mock.patch.object(subject.subprocess, "run") as build, \\
+        with mock.patch.object(subject, "load", return_value=plan), \
+                mock.patch.object(subject, "verify_head"), \
+                mock.patch.object(subject, "discover_inventory", return_value=plan["tests"]) as discover, \
+                mock.patch.object(subject.subprocess, "run") as build, \
                 mock.patch.object(subject.subprocess, "check_output",
-                                  return_value="\\n".join(sorted(expected_outputs)) + "\\n") as paths:
+                                  return_value="\n".join(sorted(expected_outputs)) + "\n") as paths:
             subject.build_command(args)
             discover.assert_called_once_with("x86_64-linux")
             build.assert_called_once()
@@ -171,10 +171,10 @@ else:
             {"alpha": test_item("alpha")},
             {**plan["tests"], "gamma": test_item("gamma")},
         ):
-            with self.subTest(inventory=inventory), \\
-                    mock.patch.object(subject, "load", return_value=plan), \\
-                    mock.patch.object(subject, "verify_head"), \\
-                    mock.patch.object(subject, "discover_inventory", return_value=inventory), \\
+            with self.subTest(inventory=inventory), \
+                    mock.patch.object(subject, "load", return_value=plan), \
+                    mock.patch.object(subject, "verify_head"), \
+                    mock.patch.object(subject, "discover_inventory", return_value=inventory), \
                     mock.patch.object(subject.subprocess, "run") as build:
                 with self.assertRaisesRegex(ValueError, "inventory no longer matches"):
                     subject.build_command(args)
