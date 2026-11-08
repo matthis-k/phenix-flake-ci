@@ -6,6 +6,7 @@
   src,
   lockFile,
   compiledName ? "cargo-workspace-tests",
+  exposeCompiled ? false,
   cargoArgs ? [ "--workspace" "--all-targets" ],
 }:
 let
@@ -62,11 +63,7 @@ let
     inherit pkgs src lockFile cargoArgs;
     name = compiledName;
   };
-in
-if uniqueNames == [ ] || builtins.length uniqueNames != builtins.length names then
-  throw "phenix-flake-ci: Cargo workspace has no valid unique test packages"
-else
-  builtins.listToAttrs (map (package: {
+  wrappers = builtins.listToAttrs (map (package: {
     name = "test.cargo-${package}";
     value = pkgs.writeShellApplication {
       name = "cargo-test-${package}";
@@ -74,4 +71,11 @@ else
         exec ${compiled}/bin/${compiledName} --package ${lib.escapeShellArg package} "$@"
       '';
     };
-  }) uniqueNames)
+  }) uniqueNames);
+in
+if uniqueNames == [ ] || builtins.length uniqueNames != builtins.length names then
+  throw "phenix-flake-ci: Cargo workspace has no valid unique test packages"
+else
+  wrappers // lib.optionalAttrs exposeCompiled {
+    "${compiledName}" = compiled;
+  }
