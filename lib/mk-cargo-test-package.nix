@@ -40,7 +40,7 @@ pkgs.rustPlatform.buildRustPackage {
     # stdenv may run the build hook from $NIX_BUILD_TOP rather than the
     # unpacked source root; cargoSetupPostUnpackHook wrote this file within
     # $sourceRoot, not necessarily the current working directory.
-    vendor_config="${NIX_BUILD_TOP:-$TMPDIR}/${sourceRoot}/.cargo/config.toml"
+    vendor_config="''${NIX_BUILD_TOP:-$TMPDIR}/$sourceRoot/.cargo/config.toml"
     if [ ! -f "$vendor_config" ]; then
       echo "missing Nix-generated offline Cargo vendor configuration: $vendor_config" >&2
       exit 1
