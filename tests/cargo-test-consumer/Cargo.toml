@@ -6,6 +6,9 @@ edition = "2021"
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+proc-macro2 = "=1.0.107"
+
 [workspace]
 members = ["crates/*"]
 resolver = "2"

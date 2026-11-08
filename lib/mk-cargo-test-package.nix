@@ -33,12 +33,18 @@ pkgs.rustPlatform.buildRustPackage {
     export CARGO_TARGET_DIR="$TMPDIR/cargo-test-target"
     export CARGO_HOME="''${CARGO_HOME:-$TMPDIR/cargo-home}"
     mkdir -p "$CARGO_TARGET_DIR" "$CARGO_HOME"
-    if [ -f .cargo/config.toml ]; then
-      cp .cargo/config.toml "$CARGO_HOME/config.toml"
+    # Nix's cargoSetupPostUnpackHook wrote the offline vendoring config in
+    # the writable unpack tree. Cargo runs in the original immutable source
+    # to preserve CARGO_MANIFEST_DIR for fixtures, so pass that config
+    # explicitly. Its @vendor@ placeholder was substituted by Nix already.
+    vendor_config="$PWD/.cargo/config.toml"
+    if [ ! -f "$vendor_config" ]; then
+      echo "missing Nix-generated offline Cargo vendor configuration" >&2
+      exit 1
     fi
     cd ${src}
-    cargo metadata --locked --offline --no-deps --format-version 1 > "$TMPDIR/cargo-metadata.json"
-    cargo test --locked --offline --no-run --message-format=json ${lib.escapeShellArgs cargoArgs} > "$TMPDIR/cargo-test-artifacts.jsonl"
+    cargo --config "$vendor_config" metadata --locked --offline --no-deps --format-version 1 > "$TMPDIR/cargo-metadata.json"
+    cargo --config "$vendor_config" test --locked --offline --no-run --message-format=json ${lib.escapeShellArgs cargoArgs} > "$TMPDIR/cargo-test-artifacts.jsonl"
     runHook postBuild
   '';
 

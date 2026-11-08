@@ -1,16 +1,16 @@
 # Reuse Cargo compilation across Nix check groups
 
-Separate Nix derivations that each invoke \`cargo test\` compile the same
+Separate Nix derivations that each invoke `cargo test` compile the same
 Rust crates repeatedly even when Nix schedules derivations only once.
 Single-store scheduling cannot deduplicate **different** derivations.
 
-\`mkCargoTestChecks\` compiles all test executables **once per compatible
+`mkCargoTestChecks` compiles all test executables **once per compatible
 Cargo profile**. Every named check is a small Nix derivation executing selected
-already-built binaries without Cargo. It returns ordinary \`checks\` and
-\`packages\`; the generic planner still discovers all checks from
-\`checks.<system>\` and works unchanged with matrix, local DAG and remote DAG.
+already-built binaries without Cargo. It returns ordinary `checks` and
+`packages`; the generic planner still discovers all checks from
+`checks.<system>` and works unchanged with matrix, local DAG and remote DAG.
 
-\`\`\`nix
+```nix
 let
   cargo = phenix-flake-ci.lib.mkCargoTestChecks {
     inherit pkgs;
@@ -34,7 +34,7 @@ in {
   checks.${system} = { /* other checks */ } // cargo.checks;
   packages.${system} = { /* other packages */ } // cargo.packages;
 }
-\`\`\`
+```
 
 ### Minimal API: automatic per-crate checks
 
@@ -56,23 +56,23 @@ Consumers attach `cargo.checks` and `cargo.packages` to their flake outputs.
 The check inventory is derived from Cargo's workspace manifest, not copied into
 a second CI registry. Advanced consumers may pass explicit `groups` instead.
 
-Default compilation uses \`cargo test --workspace --all-targets --no-run\`.
-The optional \`no-default\` profile uses \`cargo test --workspace
---no-default-features --lib --tests --no-run\`. Only profiles referenced by a
-group are built. Supply custom named profiles explicitly via \`profiles\`;
+Default compilation uses `cargo test --workspace --all-targets --no-run`.
+The optional `no-default` profile uses `cargo test --workspace
+--no-default-features --lib --tests --no-run`. Only profiles referenced by a
+group are built. Supply custom named profiles explicitly via `profiles`;
 profile selections are never implicitly merged.
 
-A group without \`packages\` selects all workspace packages; without
-\`targets\`, it executes all compiled test targets for those packages.
-\`targets.lib = true\` selects library unit tests;
-\`targets.tests = [ "integration_name" ];\` selects integration binaries.
+A group without `packages` selects all workspace packages; without
+`targets`, it executes all compiled test targets for those packages.
+`targets.lib = true` selects library unit tests;
+`targets.tests = [ "integration_name" ];` selects integration binaries.
 Unknown packages and test names fail closed. All selected test binaries are
 attempted even if a previous binary failed.
 
-The helper exposes \`prebuildTargets\` for its compiler profiles (for example
-\`.#packages.x86_64-linux.cargo-tests-default\`). Matrix consumers put those
-ordinary Nix installables into \`ci/flake-check-config.nix\`'s
-\`prebuildTargets\` field for shared cache publication. Single-store DAG
+The helper exposes `prebuildTargets` for its compiler profiles (for example
+`.#packages.x86_64-linux.cargo-tests-default`). Matrix consumers put those
+ordinary Nix installables into `ci/flake-check-config.nix`'s
+`prebuildTargets` field for shared cache publication. Single-store DAG
 backends need no separate prebuild: their check derivations naturally share
 the same corpus dependency.
 
@@ -85,7 +85,7 @@ the same corpus dependency.
   to per-crate test invocations; preserve old checks until parity is verified.
 - Whole-workspace compilation broadens source invalidation. Narrowing the
   source filter later must retain manifests, lockfile, and test fixtures.
-- \`cargo test --no-run\` cannot run doctests. Use a separate doctest check
+- `cargo test --no-run` cannot run doctests. Use a separate doctest check
   where shipping requires documentation tests.
 - Clippy and release smoke use different compiler flags and should not be
   claimed as interchangeable with test binaries.
@@ -128,3 +128,5 @@ separate profiles; their compiler flags and behavior are not interchangeable.
 independently. `testGroups` overrides the automatic per-crate test checks
 when a project needs explicit suites. The check names are ordinary Nix
 attribute names, so the existing generic scheduler and cache continue to work.
+
+The integration fixture includes registry dependencies (`proc-macro2` and `unicode-ident`) and checks offline vendoring from the immutable source directory. This regression prevents Cargo from silently falling back to network access.
