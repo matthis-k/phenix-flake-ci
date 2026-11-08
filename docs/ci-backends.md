@@ -65,6 +65,7 @@ Generated callers cannot select a mutable branch or tag.
 | `ci.backend` | Workflow | What runs |
 | --- | --- | --- |
 | `matrix` | `flake-checks.yml` | GitHub-hosted Nix check shards |
+| `nix-local` | `flake-local-dag.yml` | Entire dependency DAG in one GitHub runner/Nix store (PR-only default) |
 | `nix-dag` | `flake-dag-staged.yml` | Generated check DAG, staged fan-out and join |
 | `nix-remote` | `flake-nix-builders.yml` | One Nix scheduler with ephemeral Tailscale `ssh-ng` workers |
 
@@ -115,6 +116,22 @@ events = {
 The remote backend always rejects `pullRequest = true`. At least one event
 must remain enabled. Branch name and config path inputs are restricted to
 simple repository-relative strings.
+
+### Single-store local DAG
+
+Set `ci.backend = "nix-local";` to run all exact-head Nix checks inside
+one Nix store. This avoids cross-runner duplicate derivation builds without
+Tailscale, remote workers or shipping artifacts between runners. By default
+it runs only for pull requests, with no push or manual dispatch; callers can
+explicitly opt into other events. The reusable job restores a trusted-main
+cache read-only and **does not publish** new cache entries. Its tradeoff is
+one runner's build capacity and slower cold builds compared with a warm
+distributed pool. For small workspaces and untrusted PRs, benchmark it
+against `matrix` before choosing the required check.
+
+The paired `mkFlakeCiWorkflows` generator accepts `nix-local` as the
+untrusted pull-request backend while keeping native remote builders on
+trusted branches.
 
 ## Existing Nix tools
 
