@@ -190,6 +190,12 @@ class RemoteBuildersTest(unittest.TestCase):
         test_stage = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
         acceptance = workflow.split("  acceptance:\n", 1)[1]
         coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
+        self.assertIn("flake-check-dag.py pin", coordinator)
+        self.assertIn("phenix-verified-check-roots", coordinator)
+        self.assertLess(coordinator.index("flake-check-dag.py verify"),
+                        coordinator.index("flake-check-dag.py pin"))
+        self.assertLess(coordinator.index("flake-check-dag.py pin"),
+                        coordinator.index("Publish verified outputs"))
         self.assertIn("--test-packages ci-plan/test-packages.json --test-root ci-result/test-package-roots",
                       coordinator)
         self.assertNotIn("flake-test-packages.py build", coordinator)

@@ -122,6 +122,55 @@ class DagTests(unittest.TestCase):
                     dag.publish_command(args)
                 copy.assert_not_called()
 
+    def test_verified_outputs_are_pinned_without_substitution_or_rebuild(self):
+        plan = mkplan()
+        graph = dag.graph_summary(plan, mkgraph())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dag.save(root / "plan.json", plan)
+            dag.save(root / "graph.json", graph)
+            checks = {name: {"drv": drvpath, "status": "pass",
+                             "outputs": [output("f", name)]}
+                      for name, drvpath in plan["checks"].items()}
+            data = {"schemaVersion": dag.SCHEMA, "planDigest": plan["digest"],
+                    "graphDigest": graph["graphDigest"], "commit": plan["commit"],
+                    "system": plan["system"], "mode": "native-nix-dag",
+                    "checks": checks}
+            dag.save(root / "evidence.json", data)
+            args = type("Args", (), {"plan": root / "plan.json",
+                                     "graph": root / "graph.json",
+                                     "evidence": root / "evidence.json",
+                                     "directory": root / "roots"})()
+            outputs = sorted(output("f", name) for name in checks)
+            with mock.patch.object(dag.subprocess, "check_output",
+                                   return_value="\\n".join(outputs) + "\\n") as query, \\
+                 mock.patch.object(dag.subprocess, "run") as write:
+                dag.pin_command(args)
+                query.assert_called_once_with(
+                    ["nix", "path-info", "--offline", *outputs], text=True)
+                self.assertEqual(write.call_count, len(outputs))
+                for index, call in enumerate(write.call_args_list):
+                    self.assertEqual(call, mock.call(
+                        ["nix-store", "--realise", "--add-root",
+                         str(root / "roots" / f"check-{index:04d}"), outputs[index]],
+                        check=True, stdout=dag.subprocess.DEVNULL))
+            # A missing store output fails before creating even one GC root.
+            with mock.patch.object(dag.subprocess, "check_output",
+                                   return_value=outputs[0] + "\\n"), \\
+                 mock.patch.object(dag.subprocess, "run") as write:
+                with self.assertRaisesRegex(ValueError, "missing"):
+                    dag.pin_command(args)
+                write.assert_not_called()
+            # Unverified evidence may never write GC roots.
+            data["checks"].pop("a")
+            dag.save(root / "evidence.json", data)
+            with mock.patch.object(dag.subprocess, "run") as write, \\
+                 mock.patch.object(dag.subprocess, "check_output") as query:
+                with self.assertRaisesRegex(ValueError, "cover"):
+                    dag.pin_command(args)
+                query.assert_not_called()
+                write.assert_not_called()
+
     def test_incomplete_and_cyclic_nix_graph_rejected(self):
         plan = mkplan()
         graph = mkgraph()
