@@ -5,7 +5,8 @@
   pkgs,
   src,
   lockFile,
-  groups,
+  groups ? null,
+  noDefaultFeatures ? false,
   profiles ? {
     default = [ "--workspace" "--all-targets" ];
     "no-default" = [ "--workspace" "--no-default-features" "--lib" "--tests" ];
@@ -56,10 +57,22 @@ let
         fail "check ${name} declares an empty target selector"
       else
         { inherit profile tests includeLib; packages = packageNames; };
-  groupNames = builtins.attrNames groups;
+  discovered = import ./cargo-workspace-members.nix { inherit lib src; };
+  selectedGroups =
+    if groups == null then
+      builtins.listToAttrs (map (package: {
+        name = "cargo-${package}";
+        value.packages = [ package ];
+      }) discovered)
+    else
+      groups;
+  effectiveGroups = selectedGroups // lib.optionalAttrs noDefaultFeatures {
+    "cargo-no-default".profile = "no-default";
+  };
+  groupNames = builtins.attrNames effectiveGroups;
   checked = builtins.listToAttrs (map (name: {
     inherit name;
-    value = checkGroup name groups.${name};
+    value = checkGroup name effectiveGroups.${name};
   }) groupNames);
   usedProfiles = lib.unique (map (name: checked.${name}.profile) groupNames);
   compiled = builtins.listToAttrs (map (profile: {
@@ -95,7 +108,13 @@ let
     profile: ".#packages.${pkgs.stdenv.hostPlatform.system}.cargo-tests-${profile}"
   ) usedProfiles;
 in
-if !builtins.isAttrs groups || groups == { } then
+if groups != null && !builtins.isAttrs groups then
+  fail "groups must be an attribute set or null for automatic workspace discovery"
+else if !builtins.isBool noDefaultFeatures then
+  fail "noDefaultFeatures must be boolean"
+else if noDefaultFeatures && groups != null && groups ? cargo-no-default then
+  fail "cargo-no-default is reserved when noDefaultFeatures is enabled"
+else if effectiveGroups == { } then
   fail "at least one Cargo check group is required"
 else if !sourceValid || !profilesValid then
   fail "invalid Cargo workspace source, lock file or compilation profiles"

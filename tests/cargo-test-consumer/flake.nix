@@ -7,6 +7,12 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      automatic = phenix-flake-ci.lib.mkCargoTestChecks {
+        inherit pkgs;
+        src = ./.;
+        lockFile = ./Cargo.lock;
+        noDefaultFeatures = true;
+      };
       cargo = phenix-flake-ci.lib.mkCargoTestChecks {
         inherit pkgs;
         src = ./.;
@@ -30,7 +36,7 @@
         };
       };
     in {
-      checks.${system} = cargo.checks;
+      checks.${system} = cargo.checks // automatic.checks;
       packages.${system} = {
         default = phenix-flake-ci.lib.mkCargoTestPackage {
           inherit pkgs;

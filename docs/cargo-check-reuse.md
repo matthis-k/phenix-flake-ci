@@ -36,6 +36,26 @@ in {
 }
 \`\`\`
 
+### Minimal API: automatic per-crate checks
+
+Omit `groups` to discover Cargo workspace members once, then emit one
+`cargo-<package>` check per package. Add `noDefaultFeatures = true;` to
+also compile and execute the all-workspace no-default profile. This is the
+recommended default for consumers that don't need hand-selected group names.
+
+```nix
+cargo = phenix-flake-ci.lib.mkCargoTestChecks {
+  inherit pkgs;
+  src = lib.cleanSource ./.;
+  lockFile = ./Cargo.lock;
+  noDefaultFeatures = true;
+};
+```
+
+Consumers attach `cargo.checks` and `cargo.packages` to their flake outputs.
+The check inventory is derived from Cargo's workspace manifest, not copied into
+a second CI registry. Advanced consumers may pass explicit `groups` instead.
+
 Default compilation uses \`cargo test --workspace --all-targets --no-run\`.
 The optional \`no-default\` profile uses \`cargo test --workspace
 --no-default-features --lib --tests --no-run\`. Only profiles referenced by a
