@@ -133,3 +133,22 @@ This wrapper does not provision Tailscale policy, create GitHub secrets,
 install Nix locally or guarantee faster builds. Nix cache configuration
 remains in the existing `mkFlakeCheckConfig.cache` and backend workflows;
 the wrapper does not introduce another cache implementation.
+
+## Matrix backend: build reuse evidence
+
+The generic `matrix` backend verifies every evaluated Nix check at the exact
+consumer commit. It now also preserves the direct `nix build -L` output from
+each shard and, **after successful evidence verification**, writes a
+`flake-duplicate-builds` artifact and a job-summary table. These count the
+same Nix derivation being built more than once across isolated runner stores.
+A fully cached run can correctly report zero local builds.
+
+These counts **do not** establish that Rust compilations are shared when
+consumers define distinct Nix derivations that each invoke `cargo test`.
+For those, expose shared precompiled Cargo test packages through
+`mkCargoTestPackages`, list the compiled test corpus in
+`prebuildTargets`, and run the already-built binaries in each shard.
+Alternatively, use the single-store native DAG or remote-builder backend to
+avoid cross-runner Nix derivation duplication. A single test corpus trades
+fewer compiler invocations for coarser invalidation when workspace sources
+change; profile this tradeoff before splitting the corpus.
