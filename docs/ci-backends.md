@@ -133,6 +133,30 @@ The paired `mkFlakeCiWorkflows` generator accepts `nix-local` as the
 untrusted pull-request backend while keeping native remote builders on
 trusted branches.
 
+### Reusable Rust test compilation for matrix consumers
+
+The Cargo test-package helper can expose the **same compiled test corpus**
+as a named package, alongside its per-crate runnable wrappers:
+
+```nix
+packages.${system} = phenix-flake-ci.lib.mkCargoTestPackages {
+  inherit pkgs;
+  src = ./.;
+  lockFile = ./Cargo.lock;
+  exposeCompiled = true;
+};
+```
+
+Set `prebuildTargets = [ ".#packages.x86_64-linux.cargo-workspace-tests" ];`
+in the CI plan configuration (adjust the system for your platform). The
+prebuild cache writer then builds this shared corpus once and publishes its
+closure; all wrappers reference the **same Nix derivation**. Without
+`exposeCompiled`, the helper still returns only per-crate wrappers.
+
+In the `matrix` backend, consumers must also define `checks` that execute
+the wrappers; exposing `packages.test.cargo-*` alone does not schedule tests.
+The `nix-remote` backend already discovers and runs `test.*` packages.
+
 ## Existing Nix tools
 
 See [Nix ecosystem integrations](nix-ecosystem.md) for flake-parts, treefmt-nix, git-hooks.nix, nix-github-actions, nix-fast-build, workflow generators, and binary caches. Phenix CI composes their flake outputs rather than replacing those libraries.
