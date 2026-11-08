@@ -136,3 +136,7 @@ The integration fixture includes registry dependencies (`proc-macro2` and `unico
 Set `autoPrebuild = true;` in the consumer's Flake CI check configuration. The generic planner reads only the names of ordinary `packages.<system>` outputs, then automatically includes every `ci-prebuild-*` package as a prebuild target. The Cargo adapter exports each compiled profile with that prefix as an alias of the same derivation. This removes the separate manually-maintained `prebuildTargets` list from the consumer and applies to other language adapters equally.
 
 The opt-in is explicit and defaults to false. In non-matrix backends it only augments the plan; a single-store Nix scheduler still builds each referenced derivation once. Package names are discovered without building them. Nonconforming names cause planning to fail instead of silently selecting arbitrary targets.
+
+## Runtime semantics
+
+Each test binary runs with the **owning Cargo package's manifest directory** as its working directory, matching Cargo's normal test behavior. The immutable manifest directory recorded by `cargo metadata` must remain inside the declared workspace source; tests cannot route execution to arbitrary filesystem paths. This is validated by a nested-crate regression fixture.

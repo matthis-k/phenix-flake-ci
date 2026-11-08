@@ -44,7 +44,8 @@ class CargoArtifactsTest(unittest.TestCase):
             metadata = root / "metadata.json"
             package_id = "path+file:///source#unit@0.1.0"
             metadata.write_text(json.dumps({
-                "packages": [{"id": package_id, "name": "unit"}],
+                "packages": [{"id": package_id, "name": "unit",
+                              "manifest_path": str(root / "Cargo.toml")}],
                 "workspace_members": [package_id],
             }))
             subject.install(manifest, dest, metadata)
@@ -52,6 +53,7 @@ class CargoArtifactsTest(unittest.TestCase):
             record = json.loads((root/"out"/"cargo-tests.json").read_text())[0]
             self.assertEqual(record["target"], "unit")
             self.assertEqual(record["package"], "unit")
+            self.assertEqual(record["workdir"], str(root))
             self.assertTrue((dest / record["binary"]).is_file())
             with self.assertRaisesRegex(ValueError, "empty"):
                 subject.install(manifest, dest, metadata)

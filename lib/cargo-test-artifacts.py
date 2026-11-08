@@ -47,12 +47,16 @@ def install(input_file, output, metadata_file):
     if not isinstance(metadata, dict) or not isinstance(metadata.get("packages"), list):
         raise ValueError("invalid Cargo package metadata")
     workspace = set(metadata.get("workspace_members", []))
-    names = {}
+    members = {}
     for entry in metadata["packages"]:
         if not isinstance(entry, dict):
             raise ValueError("invalid Cargo metadata package")
         if entry.get("id") in workspace:
-            names[entry["id"]] = entry["name"]
+            manifest_path = entry.get("manifest_path")
+            if (not isinstance(manifest_path, str)
+                    or not manifest_path.endswith("/Cargo.toml")):
+                raise ValueError("workspace package lacks its Cargo manifest path")
+            members[entry["id"]] = (entry["name"], str(Path(manifest_path).parent))
     artifact_lines = input_file.read_text().splitlines()
     selected = executables(artifact_lines)
     target_kinds = {}
@@ -79,7 +83,10 @@ def install(input_file, output, metadata_file):
                       record["executable"])] = tuple(kinds)
     manifest = []
     for index, ((package, name, source), binary) in enumerate(selected):
-        crate = names.get(package)
+        identity = members.get(package)
+        if identity is None:
+            raise ValueError("Cargo test executable belongs to an unknown workspace member")
+        crate, workdir = identity
         if not isinstance(crate, str) or not crate or not all(
                 c.isalnum() or c in "_-" for c in crate):
             raise ValueError("Cargo test package is not a recognized workspace member")
@@ -93,7 +100,7 @@ def install(input_file, output, metadata_file):
         destination.chmod(0o555)
         manifest.append({"package": crate, "packageId": package,
                          "target": name, "targetKinds": list(target_kinds[package, name, source]),
-                         "binary": f"{crate}/{destination.name}"})
+                         "workdir": workdir, "binary": f"{crate}/{destination.name}"})
     (output.parent / "cargo-tests.json").write_text(
         json.dumps(manifest, sort_keys=True, indent=2) + "\n")
     print(f"Packaged {len(manifest)} already-compiled Cargo test executables "

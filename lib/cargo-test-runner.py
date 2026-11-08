@@ -21,11 +21,13 @@ def choose(manifest, bin_dir, packages, lib, tests):
             raise ValueError("invalid Cargo test artifact")
         package, target = record.get("package"), record.get("target")
         kinds, relative = record.get("targetKinds"), record.get("binary")
+        workdir = record.get("workdir")
         if (not isinstance(package, str) or not package
                 or not isinstance(target, str) or not target
                 or not isinstance(kinds, list) or not kinds
                 or not all(isinstance(kind, str) for kind in kinds)
-                or not isinstance(relative, str) or not relative):
+                or not isinstance(relative, str) or not relative
+                or not isinstance(workdir, str) or not workdir):
             raise ValueError("incomplete Cargo test artifact identity")
         path = (base / relative).resolve()
         if not path.is_relative_to(base) or path in seen_binaries:
@@ -43,7 +45,7 @@ def choose(manifest, bin_dir, packages, lib, tests):
                 continue
         if not path.is_file():
             raise ValueError(f"compiled Cargo test executable is missing: {relative}")
-        selected.append((package, target, path))
+        selected.append((package, target, path, workdir))
     if packages - available_packages:
         raise ValueError(f"unknown Cargo packages: {sorted(packages - available_packages)}")
     if tests - available_tests:
@@ -58,13 +60,16 @@ def choose(manifest, bin_dir, packages, lib, tests):
 def execute(manifest_file, bin_dir, cwd, packages, lib, tests, args):
     document = json.loads(Path(manifest_file).read_text())
     binaries = choose(document, bin_dir, set(packages), lib, set(tests))
-    source = Path(cwd)
+    source = Path(cwd).resolve()
     if not source.is_dir():
         raise ValueError("immutable Cargo source directory is absent")
     failures = []
-    for package, target, binary in binaries:
+    for package, target, binary, manifest_dir in binaries:
+        workdir = Path(manifest_dir).resolve()
+        if not workdir.is_dir() or not workdir.is_relative_to(source):
+            raise ValueError("Cargo test package working directory escapes immutable source")
         print(f"cargo-test-check: {package}/{target}", flush=True)
-        result = subprocess.run([str(binary), *args], cwd=source, check=False)
+        result = subprocess.run([str(binary), *args], cwd=workdir, check=False)
         if result.returncode:
             failures.append((package, target, result.returncode))
     if failures:

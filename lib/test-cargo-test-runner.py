@@ -27,7 +27,8 @@ class CargoCheckRunnerTests(unittest.TestCase):
             path.write_text("#!/bin/sh\nprintf '%s\\n' called >> \"$TEST_LOG\"\nexit 0\n")
             path.chmod(0o755)
             records.append({"package": package, "target": target,
-                            "targetKinds": [kind], "binary": path.name})
+                            "targetKinds": [kind], "binary": path.name,
+                            "workdir": str(root)})
         manifest = root / "manifest.json"
         manifest.write_text(json.dumps(records))
         return manifest, binaries, records
@@ -76,6 +77,15 @@ class CargoCheckRunnerTests(unittest.TestCase):
             with mock.patch.dict("os.environ", {"TEST_LOG": str(output)}):
                 runner.execute(manifest, binaries, root, ["root"], True, [], [])
             self.assertEqual(output.read_text().splitlines(), ["called"])
+
+    def test_rejects_manifest_paths_outside_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest, binaries, records = self.fixture(root)
+            records[0]["workdir"] = "/tmp"
+            manifest.write_text(json.dumps(records))
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                runner.execute(manifest, binaries, root, ["root"], True, [], [])
 
     def test_fails_instead_of_falling_back_to_cargo(self):
         with tempfile.TemporaryDirectory() as temp:
