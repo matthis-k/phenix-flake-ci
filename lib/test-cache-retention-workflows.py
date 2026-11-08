@@ -10,6 +10,7 @@ WORKFLOWS = (
     "flake-checks.yml",
     "flake-dag-staged.yml",
     "flake-nix-builders.yml",
+    "flake-local-dag.yml",
 )
 SETTING = "cache_max_store_size_linux"
 
@@ -40,7 +41,7 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
         self.assertEqual(defaults, {"6G"})
 
     def test_read_only_shards_never_publish_shared_store(self):
-        for name in ("flake-checks.yml", "flake-dag-staged.yml"):
+        for name in ("flake-checks.yml", "flake-dag-staged.yml", "flake-local-dag.yml"):
             source = (ROOT / ".github" / "workflows" / name).read_text()
             self.assertIn("save: false", source)
 
@@ -89,6 +90,8 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
         verify = result.index("python3 lib/flake-check-plan.py verify")
         report = result.index("python3 lib/shard-build-report.py --allow-zero-builds")
         self.assertIn("--prebuild-log ci-plan/prebuild-build.log", result)
+        self.assertIn('\\(.pipeline_repeated_build_events)', result)
+        self.assertNotIn('\\\\(.pipeline_repeated_build_events)', result)
         self.assertLess(verify, report, "must authenticate success before allowing zero builds")
         self.assertIn('test -f "$log"', result, "missing shard logs must fail closed")
         self.assertIn('name: flake-duplicate-builds', result)

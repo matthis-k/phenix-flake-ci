@@ -184,6 +184,15 @@ each shard and, **after successful evidence verification**, writes a
 same Nix derivation being built more than once across isolated runner stores.
 A fully cached run can correctly report zero local builds.
 
+The report also captures the shared prebuild log. Pipeline metrics count
+prebuild-to-shard rebuilds and all repeated build events, while original
+shard-only metrics remain available for comparisons. It lists the top 20
+repeated derivation paths with per-phase counts to identify actionable work.
+Nix build logs use explicit raw formatting, and zero-event results are accepted
+only after exact-head evidence verification. The single-store local backend
+restores compatible main-branch caches from either the remote-builder or
+matrix backend (in that order), but never publishes PR cache entries.
+
 These counts **do not** establish that Rust compilations are shared when
 consumers define distinct Nix derivations that each invoke `cargo test`.
 For those, expose shared precompiled Cargo test packages through

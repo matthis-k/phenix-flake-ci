@@ -16,6 +16,7 @@ class LocalDagWorkflowTest(unittest.TestCase):
         self.assertNotIn("tailscale", text.lower().split("jobs:", 1)[-1])
         self.assertIn("save: false", text)
         self.assertIn("remote-${{ steps.plan.outputs.cache_prefix }}-", text)
+        self.assertIn("            ${{ steps.plan.outputs.cache_prefix }}-", text)
         self.assertIn("persist-credentials: false", text)
 
     def test_full_exact_head_with_one_build_and_verified_evidence(self):
