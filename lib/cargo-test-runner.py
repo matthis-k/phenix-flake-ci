@@ -92,10 +92,10 @@ def main():
     parser.add_argument("--package", action="append", default=[])
     parser.add_argument("--lib", action="store_true")
     parser.add_argument("--test", action="append", default=[])
-    options = parser.parse_args(argv)
+    options, other_args = parser.parse_known_args(argv)
     try:
         execute(options.manifest, options.bin_dir, options.cwd,
-                options.package, options.lib, options.test, args)
+                options.package, options.lib, options.test, other_args + args)
     except (ValueError, OSError, json.JSONDecodeError) as error:
         parser.exit(1, f"cargo-test-check: {error}\n")
 

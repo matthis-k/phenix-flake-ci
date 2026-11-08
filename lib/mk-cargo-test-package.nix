@@ -67,28 +67,12 @@ pkgs.rustPlatform.buildRustPackage {
     cat > "$out/bin/${name}" <<'SCRIPT'
     #!${pkgs.runtimeShell}
     set -euo pipefail
-    cd ${src}
-    found=0
-    if test "$#" -ge 2 && test "$1" = "--package"; then
-      source_dir="@out@/libexec/$2"
-      shift 2
-      test -d "$source_dir"
-      for suite in "$source_dir/"*; do
-        test -x "$suite"
-        found=1
-        "$suite" "$@"
-      done
-    else
-      for group in "@out@"/libexec/*; do
-        test -d "$group"
-        for suite in "$group/"*; do
-          test -x "$suite"
-          found=1
-          "$suite" "$@"
-        done
-      done
-    fi
-    test "$found" = 1
+    # Use the same manifest-aware runner for direct packages and named Nix
+    # checks. This preserves Cargo's per-crate current-directory semantics.
+    exec ${pkgs.python3}/bin/python3 ${./cargo-test-runner.py} \
+      --manifest "@out@/cargo-tests.json" \
+      --bin-dir "@out@/libexec" \
+      --cwd "${src}" "$@"
     SCRIPT
     substituteInPlace "$out/bin/${name}" --replace-fail '@out@' "$out"
     chmod +x "$out/bin/${name}"
