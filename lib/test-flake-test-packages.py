@@ -145,6 +145,41 @@ else:
             self.assertIn("builtins.filter", args[-2])
             self.assertIn("builtins.attrNames", args[-2])
 
+    def test_build_validates_complete_inventory_once_before_native_build(self):
+        plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
+        args = type("Args", (), {"plan": "planned.json", "root": "/tmp/test-roots"})()
+        expected_outputs = {entry["out"] for entry in plan["tests"].values()}
+        with mock.patch.object(subject, "load", return_value=plan), \
+                mock.patch.object(subject, "verify_head"), \
+                mock.patch.object(subject, "discover_inventory", return_value=plan["tests"]) as discover, \
+                mock.patch.object(subject.subprocess, "run") as build, \
+                mock.patch.object(subject.subprocess, "check_output",
+                                  return_value="\n".join(sorted(expected_outputs)) + "\n") as paths:
+            subject.build_command(args)
+            discover.assert_called_once_with("x86_64-linux")
+            build.assert_called_once()
+            self.assertEqual(build.call_args.args[0][:5],
+                             ["nix", "build", "-L", "--out-link", "/tmp/test-roots"])
+            paths.assert_called_once()
+            self.assertIn("--offline", paths.call_args.args[0])
+
+        for inventory in (
+            {"alpha": {**test_item("alpha"), "drv": test_item("beta")["drv"]},
+             "beta": test_item("beta")},
+            {"alpha": {**test_item("alpha"), "out": test_item("beta")["out"]},
+             "beta": test_item("beta")},
+            {"alpha": test_item("alpha")},
+            {**plan["tests"], "gamma": test_item("gamma")},
+        ):
+            with self.subTest(inventory=inventory), \
+                    mock.patch.object(subject, "load", return_value=plan), \
+                    mock.patch.object(subject, "verify_head"), \
+                    mock.patch.object(subject, "discover_inventory", return_value=inventory), \
+                    mock.patch.object(subject.subprocess, "run") as build:
+                with self.assertRaisesRegex(ValueError, "inventory no longer matches"):
+                    subject.build_command(args)
+                build.assert_not_called()
+
     def test_verify_full_exact_head_set_and_fail_closed(self):
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
         with tempfile.TemporaryDirectory() as folder:

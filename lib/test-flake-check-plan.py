@@ -23,6 +23,26 @@ def checks(*names):
 
 
 class TestFlakeChecks(unittest.TestCase):
+    def test_generic_prebuild_discovery_and_dedup(self):
+        names = ["default", "ci-prebuild-cargo-tests-no-default",
+                 "ci-prebuild-cargo-tests-default"]
+        with mock.patch.object(planner, "run_command",
+                               return_value=json.dumps(names)) as call:
+            found = planner.discover_prebuild_packages(".", "x86_64-linux")
+        self.assertEqual(found, [
+            ".#packages.x86_64-linux.ci-prebuild-cargo-tests-default",
+            ".#packages.x86_64-linux.ci-prebuild-cargo-tests-no-default",
+        ])
+        self.assertIn("builtins.attrNames", call.call_args.args[0])
+        with mock.patch.object(planner, "run_command", return_value='["../bad"]'):
+            with self.assertRaisesRegex(ValueError, "package name"):
+                planner.discover_prebuild_packages(".", "x86_64-linux")
+
+    def test_auto_prebuild_is_only_an_explicit_opt_in(self):
+        with self.assertRaisesRegex(ValueError, "autoPrebuild"):
+            planner.make_plan(checks("a"), {**CONFIG, "autoPrebuild": "yes"}, SHA)
+        self.assertEqual(planner.make_plan(checks("a"), CONFIG, SHA)["prebuildTargets"], [])
+
     def test_new_check_enters_exact_inventory(self):
         a = planner.make_plan(checks("a", "b"), CONFIG, SHA)
         b = planner.make_plan(checks("a", "b", "new"), CONFIG, SHA)
@@ -174,7 +194,7 @@ class TestFlakeChecks(unittest.TestCase):
                 planner.build_command(args)
             expected = [".#checks.x86_64-linux." + name for name in shard["checks"]]
             build.assert_called_once_with(
-                ["nix", "build", "--no-link", "--json", "-L", *expected],
+                ["nix", "build", "--log-format", "raw", "--no-link", "--json", "-L", *expected],
                 text=True)
             evidence = json.loads((root / "evidence.json").read_text())
             self.assertEqual(evidence["status"], "pass")
@@ -205,7 +225,7 @@ class TestFlakeChecks(unittest.TestCase):
                     planner, "run_command", side_effect=fake_command) as command:
                 planner.prebuild_command(args)
             build.assert_called_once_with(
-                ["nix", "build", "--out-link", str(root / "shared-prebuild-root"), "-L",
+                ["nix", "build", "--log-format", "raw", "--out-link", str(root / "shared-prebuild-root"), "-L",
                  ".#kernel", ".#shared-plugin"],
                 check=True)
             self.assertEqual(command.call_count, 3)
@@ -238,7 +258,7 @@ class TestFlakeChecks(unittest.TestCase):
             # One root per distinct output, not one per alias/target.
             self.assertEqual(proc.call_count, 2)
             self.assertEqual(proc.call_args_list[0], mock.call(
-                ["nix", "build", "--out-link", str(root / "shared-prebuild-root"),
+                ["nix", "build", "--log-format", "raw", "--out-link", str(root / "shared-prebuild-root"),
                  "-L", ".#kernel", ".#shared-plugin"],
                 check=True,
             ))

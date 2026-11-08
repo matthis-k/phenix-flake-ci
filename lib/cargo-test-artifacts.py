@@ -47,16 +47,46 @@ def install(input_file, output, metadata_file):
     if not isinstance(metadata, dict) or not isinstance(metadata.get("packages"), list):
         raise ValueError("invalid Cargo package metadata")
     workspace = set(metadata.get("workspace_members", []))
-    names = {}
+    members = {}
     for entry in metadata["packages"]:
         if not isinstance(entry, dict):
             raise ValueError("invalid Cargo metadata package")
         if entry.get("id") in workspace:
-            names[entry["id"]] = entry["name"]
-    selected = executables(input_file.read_text().splitlines())
+            manifest_path = entry.get("manifest_path")
+            if (not isinstance(manifest_path, str)
+                    or not manifest_path.endswith("/Cargo.toml")):
+                raise ValueError("workspace package lacks its Cargo manifest path")
+            members[entry["id"]] = (entry["name"], str(Path(manifest_path).parent))
+    artifact_lines = input_file.read_text().splitlines()
+    selected = executables(artifact_lines)
+    target_kinds = {}
+    for line in artifact_lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (not isinstance(record, dict)
+                or record.get("reason") != "compiler-artifact"
+                or not isinstance(record.get("executable"), str)
+                or not record["executable"]
+                or not isinstance(record.get("profile"), dict)
+                or record["profile"].get("test") is not True):
+            continue
+        target = record.get("target")
+        if not isinstance(target, dict):
+            continue
+        kinds = target.get("kind")
+        if not isinstance(kinds, list) or not kinds or not all(
+                isinstance(kind, str) and kind for kind in kinds):
+            raise ValueError("Cargo test artifact lacks its target kind")
+        target_kinds[(record.get("package_id"), target.get("name"),
+                      record["executable"])] = tuple(kinds)
     manifest = []
     for index, ((package, name, source), binary) in enumerate(selected):
-        crate = names.get(package)
+        identity = members.get(package)
+        if identity is None:
+            raise ValueError("Cargo test executable belongs to an unknown workspace member")
+        crate, workdir = identity
         if not isinstance(crate, str) or not crate or not all(
                 c.isalnum() or c in "_-" for c in crate):
             raise ValueError("Cargo test package is not a recognized workspace member")
@@ -69,7 +99,8 @@ def install(input_file, output, metadata_file):
         shutil.copy2(binary, destination)
         destination.chmod(0o555)
         manifest.append({"package": crate, "packageId": package,
-                         "target": name, "binary": f"{crate}/{destination.name}"})
+                         "target": name, "targetKinds": list(target_kinds[package, name, source]),
+                         "workdir": workdir, "binary": f"{crate}/{destination.name}"})
     (output.parent / "cargo-tests.json").write_text(
         json.dumps(manifest, sort_keys=True, indent=2) + "\n")
     print(f"Packaged {len(manifest)} already-compiled Cargo test executables "

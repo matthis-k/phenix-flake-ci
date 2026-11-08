@@ -65,6 +65,7 @@ Generated callers cannot select a mutable branch or tag.
 | `ci.backend` | Workflow | What runs |
 | --- | --- | --- |
 | `matrix` | `flake-checks.yml` | GitHub-hosted Nix check shards |
+| `nix-local` | `flake-local-dag.yml` | Entire dependency DAG in one GitHub runner/Nix store (PR-only default) |
 | `nix-dag` | `flake-dag-staged.yml` | Generated check DAG, staged fan-out and join |
 | `nix-remote` | `flake-nix-builders.yml` | One Nix scheduler with ephemeral Tailscale `ssh-ng` workers |
 
@@ -116,6 +117,46 @@ The remote backend always rejects `pullRequest = true`. At least one event
 must remain enabled. Branch name and config path inputs are restricted to
 simple repository-relative strings.
 
+### Single-store local DAG
+
+Set `ci.backend = "nix-local";` to run all exact-head Nix checks inside
+one Nix store. This avoids cross-runner duplicate derivation builds without
+Tailscale, remote workers or shipping artifacts between runners. By default
+it runs only for pull requests, with no push or manual dispatch; callers can
+explicitly opt into other events. The reusable job restores a trusted-main
+cache read-only and **does not publish** new cache entries. Its tradeoff is
+one runner's build capacity and slower cold builds compared with a warm
+distributed pool. For small workspaces and untrusted PRs, benchmark it
+against `matrix` before choosing the required check.
+
+The paired `mkFlakeCiWorkflows` generator accepts `nix-local` as the
+untrusted pull-request backend while keeping native remote builders on
+trusted branches.
+
+### Reusable Rust test compilation for matrix consumers
+
+The Cargo test-package helper can expose the **same compiled test corpus**
+as a named package, alongside its per-crate runnable wrappers:
+
+```nix
+packages.${system} = phenix-flake-ci.lib.mkCargoTestPackages {
+  inherit pkgs;
+  src = ./.;
+  lockFile = ./Cargo.lock;
+  exposeCompiled = true;
+};
+```
+
+Set `prebuildTargets = [ ".#packages.x86_64-linux.cargo-workspace-tests" ];`
+in the CI plan configuration (adjust the system for your platform). The
+prebuild cache writer then builds this shared corpus once and publishes its
+closure; all wrappers reference the **same Nix derivation**. Without
+`exposeCompiled`, the helper still returns only per-crate wrappers.
+
+In the `matrix` backend, consumers must also define `checks` that execute
+the wrappers; exposing `packages.test.cargo-*` alone does not schedule tests.
+The `nix-remote` backend already discovers and runs `test.*` packages.
+
 ## Existing Nix tools
 
 See [Nix ecosystem integrations](nix-ecosystem.md) for flake-parts, treefmt-nix, git-hooks.nix, nix-github-actions, nix-fast-build, workflow generators, and binary caches. Phenix CI composes their flake outputs rather than replacing those libraries.
@@ -133,3 +174,31 @@ This wrapper does not provision Tailscale policy, create GitHub secrets,
 install Nix locally or guarantee faster builds. Nix cache configuration
 remains in the existing `mkFlakeCheckConfig.cache` and backend workflows;
 the wrapper does not introduce another cache implementation.
+
+## Matrix backend: build reuse evidence
+
+The generic `matrix` backend verifies every evaluated Nix check at the exact
+consumer commit. It now also preserves the direct `nix build -L` output from
+each shard and, **after successful evidence verification**, writes a
+`flake-duplicate-builds` artifact and a job-summary table. These count the
+same Nix derivation being built more than once across isolated runner stores.
+A fully cached run can correctly report zero local builds.
+
+The report also captures the shared prebuild log. Pipeline metrics count
+prebuild-to-shard rebuilds and all repeated build events, while original
+shard-only metrics remain available for comparisons. It lists the top 20
+repeated derivation paths with per-phase counts to identify actionable work.
+Nix build logs use explicit raw formatting, and zero-event results are accepted
+only after exact-head evidence verification. The single-store local backend
+restores compatible main-branch caches from either the remote-builder or
+matrix backend (in that order), but never publishes PR cache entries.
+
+These counts **do not** establish that Rust compilations are shared when
+consumers define distinct Nix derivations that each invoke `cargo test`.
+For those, expose shared precompiled Cargo test packages through
+`mkCargoTestPackages`, list the compiled test corpus in
+`prebuildTargets`, and run the already-built binaries in each shard.
+Alternatively, use the single-store native DAG or remote-builder backend to
+avoid cross-runner Nix derivation duplication. A single test corpus trades
+fewer compiler invocations for coarser invalidation when workspace sources
+change; profile this tradeoff before splitting the corpus.

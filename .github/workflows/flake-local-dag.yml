@@ -59,6 +59,7 @@ jobs:
           primary-key: local-dag-${{ steps.plan.outputs.cache_prefix }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-prefixes-first-match: |
             remote-${{ steps.plan.outputs.cache_prefix }}-
+            ${{ steps.plan.outputs.cache_prefix }}-
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
           save: false
       - name: Execute every evaluated check in one native Nix DAG

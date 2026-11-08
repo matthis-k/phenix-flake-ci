@@ -39,6 +39,23 @@ def inventory(flake, system):
     return json.loads(raw)
 
 
+def discover_prebuild_packages(flake, system):
+    """Discover generic opt-in prebuild aliases from normal flake packages.
+
+    This only reads attribute names, never builds or evaluates package outputs.
+    The convention is language-agnostic: ci-prebuild-* are exported packages.
+    """
+    names = json.loads(run_command([
+        "nix", "eval", "--json", "--apply", "builtins.attrNames",
+        f"{flake}#packages.{system}",
+    ]))
+    if not isinstance(names, list) or not all(
+            isinstance(name, str) and CHECK.fullmatch(name) for name in names):
+        raise ValueError("invalid flake package name inventory for prebuild")
+    return [f".#packages.{system}.{name}" for name in sorted(set(names))
+            if name.startswith("ci-prebuild-")]
+
+
 def validate_inventory(checks):
     if not isinstance(checks, dict) or not checks:
         raise ValueError("Nix inventory must be a non-empty check attribute set")
@@ -90,6 +107,8 @@ def make_plan(checks, config, commit):
         raise ValueError("shardCount must be between 1 and 64")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("commit must be the 40-character checked-out Git SHA")
+    if type(config.get("autoPrebuild", False)) is not bool:
+        raise ValueError("autoPrebuild must be boolean")
     hints = config.get("checkHints", {})
     if not isinstance(hints, dict):
         raise ValueError("checkHints must be an attribute set")
@@ -180,6 +199,10 @@ def write_json(path, data):
 def plan_command(args):
     config = json.loads(Path(args.config).read_text())
     system = config["system"]
+    if config.get("autoPrebuild", False):
+        config["prebuildTargets"] = sorted(set(
+            config.get("prebuildTargets", [])
+            + discover_prebuild_packages(args.flake, system)))
     checks = json.loads(Path(args.inventory).read_text()) if args.inventory else inventory(args.flake, system)
     commit = args.commit or run_command(["git", "rev-parse", "HEAD"])
     plan = make_plan(checks, config, commit)
@@ -213,7 +236,7 @@ def build_command(args):
         # reuse the same strict parser as the full-DAG backend.
         targets = [f".#checks.{plan['system']}.{name}" for name in shard["checks"]]
         raw = subprocess.check_output(
-            ["nix", "build", "--no-link", "--json", "-L", *targets], text=True,
+            ["nix", "build", "--log-format", "raw", "--no-link", "--json", "-L", *targets], text=True,
         )
         results = json.loads(raw)
         expected = {plan["checks"][name] for name in shard["checks"]}
@@ -268,7 +291,7 @@ def prebuild_command(args):
         # Nix creates numbered out-links for multiple installables.
         root = Path(args.output).parent / "shared-prebuild-root"
         root.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["nix", "build", "--out-link", str(root), "-L", *targets], check=True)
+        subprocess.run(["nix", "build", "--log-format", "raw", "--out-link", str(root), "-L", *targets], check=True)
     results = {}
     for target in targets:
         # Read realized store identity only after the combined build. This

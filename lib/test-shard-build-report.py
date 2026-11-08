@@ -57,6 +57,44 @@ class ShardBuildReportTests(unittest.TestCase):
         self.assertEqual(result["build_events"], 1)
         self.assertEqual(result["distinct_derivation_paths"], 1)
 
+    def test_verified_all_cache_hit_shards_have_zero_duplicate_builds(self):
+        logs = {
+            "00": "copying path '/nix/store/abc' from cache...",
+            "01": "",
+        }
+        result = subject.analyze(logs, allow_zero_builds=True)
+        self.assertEqual(result["build_events"], 0)
+        self.assertEqual(result["distinct_derivation_paths"], 0)
+        self.assertEqual(result["repeated_build_events"], 0)
+        self.assertEqual(result["paths_seen_in_multiple_shards"], 0)
+        self.assertEqual(result["shards"]["00"]["build_events"], 0)
+        self.assertEqual(result["shards"]["01"]["build_events"], 0)
+
+    def test_prebuild_duplicates_are_included_in_pipeline(self):
+        logs = {"00": "\n".join([build(A), build(A), build(B)]),
+                "01": "\n".join([build(A), build(C)])}
+        prebuild = "\n".join([build(A), build(C), build(C)])
+        result = subject.analyze(logs, prebuild_log=prebuild)
+        self.assertEqual(result["build_events"], 5)
+        self.assertEqual(result["prebuild_build_events"], 3)
+        self.assertEqual(result["repeated_events_within_prebuild"], 1)
+        self.assertEqual(result["paths_rebuilt_after_prebuild"], 2)
+        self.assertEqual(result["repeated_events_after_prebuild"], 4)
+        self.assertEqual(result["pipeline_build_events"], 8)
+        self.assertEqual(result["pipeline_distinct_derivation_paths"], 3)
+        self.assertEqual(result["pipeline_repeated_build_events"], 5)
+        self.assertEqual(result["top_repeated_derivations"][0],
+                         {"drv": A, "events": 4, "prebuild": 1,
+                          "shards": {"00": 2, "01": 1}})
+
+    def test_prebuild_only_and_invalid_log(self):
+        result = subject.analyze({"00": "", "01": ""}, prebuild_log=build(B),
+                                 allow_zero_builds=True)
+        self.assertEqual(result["pipeline_build_events"], 1)
+        self.assertEqual(result["pipeline_repeated_build_events"], 0)
+        with self.assertRaisesRegex(ValueError, "prebuild log must be text"):
+            subject.analyze({"00": build(A)}, prebuild_log=b"bytes")
+
     def test_malformed_or_empty_evidence_is_not_interpreted_as_zero_builds(self):
         with self.assertRaisesRegex(ValueError, "at least one"):
             subject.analyze({})

@@ -131,6 +131,17 @@ in
     assert builtins.match ".*id-token: write.*" value == null;
     true;
 
+  pairedPolicySupportsCredentialFreeSingleStorePullRequests =
+    let
+      single = flat (make (policy // { pullRequest.backend = "nix-local"; })).pullRequest;
+    in
+    assert builtins.match ".*flake-local-dag.yml@${sha}.*" single != null;
+    assert builtins.match ".*pull_request:.*" single != null;
+    assert builtins.match ".*id-token: write.*" single == null;
+    assert builtins.match ".*push:.*" single == null;
+    assert builtins.match ".*workflow_dispatch:.*" single == null;
+    true;
+
   unknownAndUnsafePolicyShapesFailClosed =
     assert fail { trusted = policy.trusted; unknown = "unsafe"; };
     assert fail (policy // { trusted = policy.trusted // { extra = true; }; });

@@ -25,8 +25,8 @@ let
   slotsPerWorker = remote.slotsPerWorker or 2;
   credentials = remote.credentials or "oidc";
   pullRequest = events.pullRequest or (backend != "nix-remote");
-  pushBranches = events.pushBranches or [ "main" ];
-  workflowDispatch = events.workflowDispatch or true;
+  pushBranches = events.pushBranches or (if backend == "nix-local" then [ ] else [ "main" ]);
+  workflowDispatch = events.workflowDispatch or (backend != "nix-local");
   remoteSelected = backend == "nix-remote";
   # Optional typed admission guard for a generated trusted push workflow.
   # This checks manual dispatch refs too; raw GitHub expressions are never
@@ -81,14 +81,15 @@ let
       + prIdentity untrustedExclusion.repository exclusionAuthors + ") }}") ];
   workflowFile = {
     matrix = "flake-checks.yml";
+    nix-local = "flake-local-dag.yml";
     nix-dag = "flake-dag-staged.yml";
     nix-remote = "flake-nix-builders.yml";
   }.${backend} or (fail "unsupported CI backend: ${backend}");
   valid =
     if !isAttrs ci || !keysWithin ci [ "backend" "remote" ] then
       fail "ci must contain only backend and remote"
-    else if !builtins.isString backend || !(builtins.elem backend [ "matrix" "nix-dag" "nix-remote" ]) then
-      fail "backend must be matrix, nix-dag or nix-remote"
+    else if !builtins.isString backend || !(builtins.elem backend [ "matrix" "nix-local" "nix-dag" "nix-remote" ]) then
+      fail "backend must be matrix, nix-local, nix-dag or nix-remote"
     else if !isAttrs remote || !keysWithin remote [ "transport" "workers" "slotsPerWorker" "credentials" ] then
       fail "remote must contain only transport, workers, slotsPerWorker and credentials"
     else if !remoteSelected && remote != { } then

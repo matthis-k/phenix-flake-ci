@@ -249,6 +249,37 @@ def verify_command(args):
     print(f"PASS: {len(checks)} checked derivations, complete exact-head DAG evidence")
 
 
+def pin_command(args):
+    """Keep verified check closures alive until the trusted cache post-job save.
+
+    The cache action may collect unrooted outputs after the job's last step.
+    Verify evidence first, require all outputs already in this local store,
+    then create ordinary Nix GC roots; never substitute or rebuild here.
+    """
+    verify_command(args)
+    evidence = json.loads(Path(args.evidence).read_text())
+    outputs = sorted({path for check in evidence["checks"].values()
+                      for path in check["outputs"]})
+    if not outputs:
+        raise ValueError("no verified check outputs to pin")
+    present = subprocess.check_output(
+        ["nix", "path-info", "--offline", *outputs], text=True,
+    ).splitlines()
+    if len(present) != len(outputs) or set(present) != set(outputs):
+        raise ValueError("verified check outputs missing from coordinator Nix store")
+    roots = Path(args.directory)
+    if roots.exists() and any(roots.iterdir()):
+        raise ValueError("check output GC root directory must be empty")
+    roots.mkdir(parents=True, exist_ok=True)
+    for index, path in enumerate(outputs):
+        subprocess.run(
+            ["nix-store", "--realise", "--add-root",
+             str(roots / f"check-{index:04d}"), path],
+            check=True, stdout=subprocess.DEVNULL,
+        )
+    print(f"Pinned {len(outputs)} verified check outputs and their closures")
+
+
 def publish_command(args):
     """Publish only outputs that passed complete exact-head DAG verification."""
     verify_command(args)
@@ -288,6 +319,12 @@ def main():
     c.add_argument("--graph", required=True)
     c.add_argument("--evidence", required=True)
     c.set_defaults(func=verify_command)
+    d = subs.add_parser("pin")
+    d.add_argument("--plan", required=True)
+    d.add_argument("--graph", required=True)
+    d.add_argument("--evidence", required=True)
+    d.add_argument("--directory", required=True, help="Fresh directory for GC roots")
+    d.set_defaults(func=pin_command)
     d = subs.add_parser("publish")
     d.add_argument("--plan", required=True)
     d.add_argument("--graph", required=True)

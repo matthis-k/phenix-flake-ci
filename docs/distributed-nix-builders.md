@@ -113,3 +113,13 @@ time, total runner-minutes, actual Nix build time, compilation event counts,
 duplicate Nix derivations and transfer overhead. The prior same-commit
 staged DAG baseline is 16m45s, conventional full matrix 18m52s.
 Do not claim speedup until new runs succeed and equivalent evidence is checked.
+
+## Cache retention of verified check outputs
+
+The trusted coordinator builds the complete check DAG with `--no-link`.
+Before the cache action's post-job garbage collection, it verifies exact-head
+output evidence and registers a GC root for each realized check output.
+An offline store-presence gate prevents silent substitution or recompilation
+while pinning. The roots protect transitive closures through cache save; they
+do not grant workers cache write authority. Runnable test outputs remain
+separately protected by the coordinator's existing test-package build roots.
