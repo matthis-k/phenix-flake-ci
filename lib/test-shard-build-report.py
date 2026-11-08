@@ -57,6 +57,19 @@ class ShardBuildReportTests(unittest.TestCase):
         self.assertEqual(result["build_events"], 1)
         self.assertEqual(result["distinct_derivation_paths"], 1)
 
+    def test_verified_all_cache_hit_shards_have_zero_duplicate_builds(self):
+        logs = {
+            "00": "copying path '/nix/store/abc' from cache...",
+            "01": "",
+        }
+        result = subject.analyze(logs, allow_zero_builds=True)
+        self.assertEqual(result["build_events"], 0)
+        self.assertEqual(result["distinct_derivation_paths"], 0)
+        self.assertEqual(result["repeated_build_events"], 0)
+        self.assertEqual(result["paths_seen_in_multiple_shards"], 0)
+        self.assertEqual(result["shards"]["00"]["build_events"], 0)
+        self.assertEqual(result["shards"]["01"]["build_events"], 0)
+
     def test_malformed_or_empty_evidence_is_not_interpreted_as_zero_builds(self):
         with self.assertRaisesRegex(ValueError, "at least one"):
             subject.analyze({})
