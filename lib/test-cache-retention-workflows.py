@@ -76,6 +76,21 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
                 "leaf/join must restore the exact-head prebuild cache",
             )
 
+    def test_matrix_duplicate_build_report_requires_verified_shards(self):
+        source = (ROOT / ".github" / "workflows" / "flake-checks.yml").read_text()
+        shard = source.split("  shard:\n", 1)[1].split("  result:\n", 1)[0]
+        result = source.split("  result:\n", 1)[1]
+        self.assertIn("2>&1 | tee ci-evidence/build.log", shard)
+        self.assertIn("path: ci-evidence/", shard)
+        self.assertIn("if: always()", source)
+        verify = result.index("python3 lib/flake-check-plan.py verify")
+        report = result.index("python3 lib/shard-build-report.py --allow-zero-builds")
+        self.assertLess(verify, report, "must authenticate success before allowing zero builds")
+        self.assertIn('test -f "$log"', result, "missing shard logs must fail closed")
+        self.assertIn('name: flake-duplicate-builds', result)
+        self.assertIn('ci-evidence/duplicate-builds.json', result)
+        self.assertIn("GITHUB_STEP_SUMMARY", result)
+
     def test_remote_builder_cache_stays_in_trusted_coordinator(self):
         source = (ROOT / ".github" / "workflows" / "flake-nix-builders.yml").read_text()
         self.assertIn("Restore and save trusted remote Nix store", source)
