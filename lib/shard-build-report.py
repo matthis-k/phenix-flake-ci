@@ -14,8 +14,12 @@ BUILD = re.compile(
 )
 
 
-def analyze(logs):
-    """Return path-identity counts. Input maps distinct shard IDs to log text."""
+def analyze(logs, *, allow_zero_builds=False):
+    """Count direct Nix build events from successful shard logs by derivation path.
+
+    When the caller has already verified successful exact-head shard evidence,
+    an all-cache-hit build with no local derivation builds is a valid result.
+    """
     if not logs:
         raise ValueError("at least one shard is required")
     owners = defaultdict(set)
@@ -33,7 +37,7 @@ def analyze(logs):
         total += len(paths)
         repeated_within_shard += len(paths) - len(unique)
         by_shard[shard] = {"build_events": len(paths), "unique_paths": len(unique)}
-    if not total:
+    if not total and not allow_zero_builds:
         raise ValueError("no direct Nix build announcements in shard logs")
     cross_shard = sum(1 for shard_ids in owners.values() if len(shard_ids) > 1)
     # The event count includes any repeated local attempts within one shard.
@@ -54,6 +58,10 @@ def main():
         "--shard", action="append", required=True, metavar="NN=JOB_LOG",
         help="One complete successful Nix shard job log, e.g. 02=shard-02.log",
     )
+    parser.add_argument(
+        "--allow-zero-builds", action="store_true",
+        help="Accept zero Nix build announcements only after successful shard evidence verification",
+    )
     arguments = parser.parse_args()
     logs = {}
     for item in arguments.shard:
@@ -65,7 +73,8 @@ def main():
         if not re.fullmatch(r"[0-9]{2}", shard) or not path:
             parser.error("invalid shard or empty log path")
         logs[shard] = Path(path).read_text(encoding="utf-8")
-    print(json.dumps(analyze(logs), indent=2, sort_keys=True))
+    print(json.dumps(analyze(logs, allow_zero_builds=arguments.allow_zero_builds),
+                     indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
