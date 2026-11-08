@@ -143,7 +143,7 @@ class DagTests(unittest.TestCase):
                                      "directory": root / "roots"})()
             outputs = sorted(output("f", name) for name in checks)
             with mock.patch.object(dag.subprocess, "check_output",
-                                   return_value="\\n".join(outputs) + "\\n") as query, \\
+                                   return_value="\n".join(outputs) + "\n") as query, \
                  mock.patch.object(dag.subprocess, "run") as write:
                 dag.pin_command(args)
                 query.assert_called_once_with(
@@ -156,7 +156,7 @@ class DagTests(unittest.TestCase):
                         check=True, stdout=dag.subprocess.DEVNULL))
             # A missing store output fails before creating even one GC root.
             with mock.patch.object(dag.subprocess, "check_output",
-                                   return_value=outputs[0] + "\\n"), \\
+                                   return_value=outputs[0] + "\n"), \
                  mock.patch.object(dag.subprocess, "run") as write:
                 with self.assertRaisesRegex(ValueError, "missing"):
                     dag.pin_command(args)
@@ -164,7 +164,7 @@ class DagTests(unittest.TestCase):
             # Unverified evidence may never write GC roots.
             data["checks"].pop("a")
             dag.save(root / "evidence.json", data)
-            with mock.patch.object(dag.subprocess, "run") as write, \\
+            with mock.patch.object(dag.subprocess, "run") as write, \
                  mock.patch.object(dag.subprocess, "check_output") as query:
                 with self.assertRaisesRegex(ValueError, "cover"):
                     dag.pin_command(args)
