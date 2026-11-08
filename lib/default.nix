@@ -10,6 +10,7 @@ let
   mkTestCases = import ./mk-test-cases.nix;
   mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
   mkCargoTestChecks = import ./mk-cargo-test-checks.nix;
+  mkCargoWorkspace = import ./mk-cargo-workspace.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
@@ -106,7 +107,7 @@ let
     };
 in
 {
-  version = "0.15.0";
+  version = "0.16.0";
   tests = (import ./tests.nix) // (import ./test-api-tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix) // (import ./flake-ci-workflows-tests.nix);
   inherit
     ciSchemaVersion
@@ -121,6 +122,7 @@ in
     mkCargoTestPackage
     mkCargoTestPackages
     mkCargoTestChecks
+    mkCargoWorkspace
     rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs

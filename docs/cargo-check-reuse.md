@@ -91,3 +91,40 @@ the same corpus dependency.
   claimed as interchangeable with test binaries.
 - Groups can deliberately overlap; for zero duplicate execution, assign
   each test target to only one group.
+
+## Complete workspace API (recommended)
+
+`mkCargoWorkspace` composes the reusable test-check engine with conventional
+strict Clippy, Cargo formatting, optional Nix formatting, and release-example
+smoke packages. The result still contains only standard `checks`, `packages`
+and `prebuildTargets`; no custom CI runner or imperative consumer orchestration.
+
+```nix
+let
+  rust = phenix-flake-ci.lib.mkCargoWorkspace {
+    inherit pkgs;
+    src = lib.cleanSource ./.;
+    lockFile = ./Cargo.lock;
+    noDefaultFeatures = true;
+    nixfmtFiles = [ ./flake.nix ./ci/flake-check-config.nix ];
+    smoke.kernel-smoke = {
+      package = "phenix-kernel";
+      example = "basic";
+      # release = true; # default
+    };
+  };
+in {
+  checks.${system} = { /* project-specific checks */ } // rust.checks;
+  packages.${system} = rust.packages;
+}
+```
+
+The consumer owns which example demonstrates shipping behavior, while Flake
+CI owns the Nix builders, Cargo lock vendoring, test corpus reuse, command
+invocations and output evidence. Cargo tests and linting intentionally remain
+separate profiles; their compiler flags and behavior are not interchangeable.
+
+`cargoFmt` and `clippy` default to enabled and can be turned off
+independently. `testGroups` overrides the automatic per-crate test checks
+when a project needs explicit suites. The check names are ordinary Nix
+attribute names, so the existing generic scheduler and cache continue to work.

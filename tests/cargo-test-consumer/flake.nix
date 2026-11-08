@@ -13,6 +13,16 @@
         lockFile = ./Cargo.lock;
         noDefaultFeatures = true;
       };
+      workspace = phenix-flake-ci.lib.mkCargoWorkspace {
+        inherit pkgs;
+        src = ./.;
+        lockFile = ./Cargo.lock;
+        noDefaultFeatures = true;
+        smoke.fixture-smoke = {
+          package = "generic-cargo-test-fixture";
+          example = "basic";
+        };
+      };
       cargo = phenix-flake-ci.lib.mkCargoTestChecks {
         inherit pkgs;
         src = ./.;
@@ -36,7 +46,7 @@
         };
       };
     in {
-      checks.${system} = cargo.checks // automatic.checks;
+      checks.${system} = cargo.checks // automatic.checks // workspace.checks;
       packages.${system} = {
         default = phenix-flake-ci.lib.mkCargoTestPackage {
           inherit pkgs;
@@ -48,6 +58,6 @@
         src = ./.;
         lockFile = ./Cargo.lock;
         exposeCompiled = true;
-      } // cargo.packages;
+      } // cargo.packages // workspace.packages;
     };
 }

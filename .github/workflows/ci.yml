@@ -103,7 +103,10 @@ jobs:
             "$fixture#checks.x86_64-linux.no-default" \
             "$fixture#checks.x86_64-linux.cargo-generic-cargo-test-fixture" \
             "$fixture#checks.x86_64-linux.cargo-generic-cargo-child" \
-            "$fixture#checks.x86_64-linux.cargo-no-default"
+            "$fixture#checks.x86_64-linux.cargo-no-default" \
+            "$fixture#checks.x86_64-linux.clippy" \
+            "$fixture#checks.x86_64-linux.format" \
+            "$fixture#checks.x86_64-linux.fixture-smoke"
           main_corpus="$(nix build --no-write-lock-file --no-link --print-out-paths \
             "$fixture#packages.x86_64-linux.cargo-tests-default")"
           no_default_corpus="$(nix build --no-write-lock-file --no-link --print-out-paths \
