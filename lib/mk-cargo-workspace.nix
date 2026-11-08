@@ -101,7 +101,7 @@ else if !builtins.isAttrs smoke then
 else if collision != [ ] then
   fail "check names collide with Cargo test groups: ${builtins.concatStringsSep ", " collision}"
 else
-  builtins.deepSeq smokePackages {
+  {
     checks = tests.checks // otherChecks;
     packages = tests.packages // smokePackages;
     inherit (tests) prebuildTargets;
