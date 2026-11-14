@@ -174,11 +174,22 @@ def run_command(args):
     result = {"schemaVersion": SCHEMA, "digest": plan["digest"],
               "commit": plan["commit"], "name": args.name,
               "drv": entry["drv"], "out": entry["out"], "status": "failed"}
+    # A generic executable may omit detailed output. Declarative mkTest
+    # packages additionally write structured per-case evidence here.
+    runtime_dir = Path(args.output).parent / "runtime-result"
+    runtime_report = runtime_dir / "result.json"
+    environment = dict(os.environ, PHENIX_TEST_OUTPUT=str(runtime_dir.resolve()))
     try:
         subprocess.run(["nix", "run", "--offline", "--no-substitute", "--max-jobs", "0", "--no-write-lock-file",
-                        target(plan["system"], args.name)], check=True)
+                        target(plan["system"], args.name)], env=environment, check=True)
+        if runtime_report.exists():
+            details = load(runtime_report)
+            if not isinstance(details, dict) or details.get("status") != "pass":
+                raise ValueError("runtime test report is missing a passing status")
         result["status"] = "pass"
     finally:
+        if runtime_report.exists():
+            result["runtime"] = load(runtime_report)
         save(args.output, result)
     print(f"PASS: runnable test package {args.name}")
 
