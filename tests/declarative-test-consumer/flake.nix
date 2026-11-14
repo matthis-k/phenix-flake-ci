@@ -193,16 +193,18 @@
           };
         };
       });
-      packages.${system}."test.rpc" = suite.packages."test.rpc";
       # Deliberately failing derivation used solely to prove that failed
       # assertions cause nix build to fail. Not part of the required checks.
-      packages.${system}.assertion-fails = ciLib.mkTest {
+      packages.${system} = {
+        "test.rpc" = suite.packages."test.rpc";
+        assertion-fails = ciLib.mkTest {
         inherit pkgs;
         name = "assertion-fails";
         command = { inherit program; args = [ "status" ]; };
         expect = {
           exitCode = 9;
           stdout.contains = "never-there";
+        };
         };
       };
     };
