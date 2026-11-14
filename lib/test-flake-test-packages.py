@@ -29,6 +29,29 @@ def test_plan(**entries):
 
 
 class TestPackageTests(unittest.TestCase):
+    def test_untrusted_staged_dag_executes_all_prebuilt_test_packages(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/flake-dag-staged.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  shared:\n", 1)[0]
+        join = workflow.split("  join:\n", 1)[1].split("  test:\n", 1)[0]
+        test = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        gate = workflow.split("  acceptance:\n", 1)[1]
+        self.assertIn("flake-test-packages.py plan", plan)
+        self.assertIn("test_matrix:", plan)
+        self.assertIn("test_count:", plan)
+        self.assertLess(join.index("flake-dag-stages.py verify"),
+                        join.index("flake-test-packages.py build"))
+        self.assertLess(join.index("flake-test-packages.py build"),
+                        join.index("flake-test-packages.py export"))
+        self.assertIn("needs: [plan, join]", test)
+        self.assertIn("--closure dag-test-closure/closure.nar", test)
+        self.assertIn("flake-test-packages.py run", test)
+        self.assertNotIn("nix build", test)
+        for forbidden in ("TS_OAUTH", "id-token: write", "secrets: inherit"):
+            self.assertNotIn(forbidden, test)
+        self.assertIn("needs: [plan, shared, leaf, join, test]", gate)
+        self.assertIn("flake-test-packages.py verify", gate)
+
     def test_workflow_requires_same_run_handoff_before_execution(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/flake-nix-builders.yml").read_text()
         coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
