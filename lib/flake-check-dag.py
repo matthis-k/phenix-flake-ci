@@ -229,7 +229,8 @@ def build_command(args):
         # Only pin existing outputs; cannot silently recompile on this pass.
         subprocess.run(
             ["nix", "build", "--offline", "--no-substitute",
-             "--max-jobs", "0", "--out-link", str(root),
+             "--max-jobs", "0", "--option", "builders", "",
+             "--out-link", str(root),
              *[packages.target(plan["system"], name)
                for name in sorted(test_plan["tests"])]],
             check=True,
