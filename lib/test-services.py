@@ -15,7 +15,7 @@ class ServiceError(Exception):
     pass
 
 
-_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\\Z")
+_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 
 
 def validate(socket_names, services, validate_command, validate_references):
