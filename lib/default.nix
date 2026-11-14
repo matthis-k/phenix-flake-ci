@@ -6,6 +6,8 @@ let
   mkFlakeCiWorkflows = import ./mk-flake-ci-workflows.nix;
   mkCargoTestPackage = import ./mk-cargo-test-package.nix;
   mkTest = import ./mk-test.nix;
+  mkSuite = import ./mk-test-suite.nix;
+  testRef = import ./test-ref.nix;
   testAssert = import ./test-assert.nix;
   mkTestCases = import ./mk-test-cases.nix;
   mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
@@ -112,6 +114,8 @@ in
     maintenanceCommandGraph
     mkCi
     mkTest
+    mkSuite
+    testRef
     testAssert
     mkTestCases
     mkFlakeCheckConfig
