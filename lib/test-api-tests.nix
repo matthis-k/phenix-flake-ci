@@ -3,6 +3,9 @@ let
   pkgs = {
     python3 = "/nix/store/fake-python";
     runCommand = name: attrs: script: { inherit name attrs script; };
+    linkFarm = name: entries: "/nix/store/fake-runner";
+    writeText = name: content: "/nix/store/fake-test-spec";
+    writeShellApplication = attrs: attrs;
   };
   simple = mkTest {
     inherit pkgs;
@@ -39,6 +42,30 @@ let
     expect.files."state.json".exists = true;
   };
   sequenceSpec = builtins.fromJSON sequence.attrs.testSpec;
+
+  runtime = mkTest {
+    inherit pkgs;
+    name = "rpc-smoke";
+    execution = "runtime";
+    sockets = [ "rpc" ];
+    services.server = {
+      command = {
+        program = "/nix/store/server/bin/server";
+        args = [ { ref = { fixture = "rpc"; field = "path"; }; } ];
+      };
+      ready.unixSocket = "rpc";
+    };
+    command = {
+      program = "/nix/store/client/bin/client";
+      args = [ { ref = { fixture = "rpc"; field = "path"; }; } ];
+    };
+  };
+  invalidExecution = builtins.tryEval (builtins.deepSeq (mkTest {
+    inherit pkgs;
+    name = "bad";
+    execution = "unknown";
+    command.program = "/bin/true";
+  }) true);
 
   invalidBoth = builtins.tryEval (builtins.deepSeq (mkTest {
     inherit pkgs;
@@ -101,6 +128,12 @@ let
 
 in
 {
+  mkTestProducesRunnablePackage = 
+    assert runtime.name == "test-rpc-smoke";
+    assert builtins.match ".*test-runner.py.*" runtime.text != null;
+    assert !invalidExecution.success;
+    true;
+
   mkTestCreatesCheckDerivation = 
     assert simple.name == "test-cli-contract";
     assert simple.attrs.passAsFile == [ "testSpec" ];
