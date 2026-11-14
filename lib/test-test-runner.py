@@ -221,5 +221,96 @@ class RunnerTests(unittest.TestCase):
         self.assertLessEqual(len(diff.splitlines()), 81)
 
 
+    def test_managed_unix_socket_service_and_client(self):
+        reference = {"ref": {"fixture": "rpc", "field": "path"}}
+        server = (
+            "import socket,sys; "
+            "s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(5); "
+            "\\nwhile True:\\n c,_=s.accept(); data=c.recv(1024); c.sendall(b'pong' if data == b'ping' else b'bad'); c.close()"
+        )
+        client = (
+            "import socket,sys; s=socket.socket(socket.AF_UNIX); "
+            "s.connect(sys.argv[1]); s.sendall(b'ping'); print(s.recv(1024).decode())"
+        )
+        spec = {
+            "name": "rpc-interoperability",
+            "sockets": ["rpc"],
+            "services": {"server": {
+                "command": self.command(server, reference),
+                "ready": {"unixSocket": "rpc", "timeoutSeconds": 2},
+            }},
+            "steps": [{"id": "ping", "command": self.command(client, reference),
+                       "expect": {"stdout": {"contains": "pong"}}}],
+        }
+        evidence = runner.test(spec)
+        self.assertEqual(evidence["status"], "pass", evidence)
+        self.assertEqual(evidence["steps"], ["ping"])
+        self.assertIn("server", evidence["services"])
+
+    def test_managed_service_readiness_timeout_is_failure(self):
+        reference = {"ref": {"fixture": "rpc", "field": "path"}}
+        evidence = runner.test({
+            "sockets": ["rpc"],
+            "services": {"slow": {
+                "command": self.command("import time; print('starting', flush=True);time.sleep(3)", reference),
+                "ready": {"unixSocket": "rpc", "timeoutSeconds": 0.08}}},
+            "command": self.command("print('must-not-run')"),
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("readiness timed out", evidence["failures"][0]["reason"])
+        self.assertIn("starting", evidence["services"]["slow"]["stdoutTail"])
+        self.assertEqual(evidence["steps"], [])
+
+    def test_managed_service_early_exit_is_failure(self):
+        evidence = runner.test({
+            "sockets": ["rpc"],
+            "services": {"crashed": {
+                "command": self.command("import sys;print('crash',flush=True);sys.exit(7)"),
+                "ready": {"unixSocket": "rpc", "timeoutSeconds": 1}}},
+            "command": self.command("print('must-not-run')"),
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("exited before readiness", evidence["failures"][0]["reason"])
+        self.assertIn("crash", evidence["services"]["crashed"]["stdoutTail"])
+
+    def test_unknown_fixture_ref_rejected_before_side_effects(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-startup"
+            with self.assertRaises(runner.InvalidSpec):
+                runner.test({
+                    "sockets": ["rpc"],
+                    "services": {"server": {
+                        "command": self.command(
+                            f"from pathlib import Path;Path({str(marker)!r}).touch()"),
+                        "ready": {"unixSocket": "rpc"}}},
+                    "command": self.command("print('x')", {
+                        "ref": {"fixture": "unknown", "field": "path"}}),
+                })
+            self.assertFalse(marker.exists())
+
+    def test_managed_service_is_terminated_after_test(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "service.pid"
+            reference = {"ref": {"fixture": "rpc", "field": "path"}}
+            server = ("import socket,sys,os,pathlib;"
+                      "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                      "pathlib.Path(sys.argv[2]).write_text(str(os.getpid()));"
+                      "import time;time.sleep(30)")
+            result = runner.test({
+                "sockets": ["rpc"],
+                "services": {"server": {
+                    "command": self.command(server, reference, str(pidfile)),
+                    "ready": {"unixSocket": "rpc", "timeoutSeconds": 2}}},
+                "command": self.command("print('done')"),
+            })
+            self.assertEqual(result["status"], "pass", result)
+            pid = int(pidfile.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
