@@ -37,6 +37,10 @@ let
   spec = { inherit name expect env fixtures sockets services; }
     // (if command != null then { inherit command; } else { inherit steps; });
   specFile = pkgs.writeText "test-${name}.json" (builtins.toJSON spec);
+  runner = pkgs.linkFarm "phenix-test-runner" [
+    { name = "test-runner.py"; path = ./test-runner.py; }
+    { name = "test_services.py"; path = ./test_services.py; }
+  ];
 in
 assert valid;
 if execution == "build" then
@@ -44,7 +48,7 @@ if execution == "build" then
     testSpec = builtins.toJSON spec;
     passAsFile = [ "testSpec" ];
   } ''
-    ${pkgs.python3}/bin/python ${./test-runner.py} --spec "$testSpecPath" --output "$out"
+    ${pkgs.python3}/bin/python ${runner}/test-runner.py --spec "$testSpecPath" --output "$out"
   ''
 else
   pkgs.writeShellApplication {
@@ -56,6 +60,6 @@ else
       else
         result_dir="$(mktemp -d)"
       fi
-      exec ${pkgs.python3}/bin/python ${./test-runner.py} --spec ${specFile} --output "$result_dir"
+      exec ${pkgs.python3}/bin/python ${runner}/test-runner.py --spec ${specFile} --output "$result_dir"
     '';
   }
