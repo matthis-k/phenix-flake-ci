@@ -51,6 +51,13 @@ jobs:
             exit 1
           fi
 
+      - name: Verify prebuilt process scenario runs without tester-side compilation
+        run: |
+          set -euo pipefail
+          target='./tests/declarative-test-consumer#packages.x86_64-linux."test.rpc"'
+          nix build --no-write-lock-file --no-link "$target"
+          nix run --no-write-lock-file --offline --no-substitute --max-jobs 0 "$target"
+
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
 
