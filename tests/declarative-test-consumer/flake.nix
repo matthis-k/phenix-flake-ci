@@ -46,6 +46,45 @@
         esac
       '';
       program = "${cli}/bin/fixture-cli";
+      socket = ciLib.testRef.socket "rpc";
+      serverScript = pkgs.writeText "rpc-server.py" ''
+        import socket
+        import sys
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(sys.argv[1])
+            server.listen(5)
+            while True:
+                conn, _ = server.accept()
+                with conn:
+                    payload = conn.recv(1024)
+                    conn.sendall(b"pong" if payload == b"ping" else b"error")
+      '';
+      clientScript = pkgs.writeText "rpc-client.py" ''
+        import socket
+        import sys
+        with socket.socket(socket.AF_UNIX) as client:
+            client.connect(sys.argv[1])
+            client.sendall(b"ping")
+            print(client.recv(1024).decode())
+      '';
+      suite = ciLib.mkSuite {
+        inherit pkgs;
+        tests.rpc = {
+          sockets = [ "rpc" ];
+          services.server = {
+            command = {
+              program = "${pkgs.python3}/bin/python";
+              args = [ "${serverScript}" socket ];
+            };
+            ready = { unixSocket = "rpc"; timeoutSeconds = 5; };
+          };
+          command = {
+            program = "${pkgs.python3}/bin/python";
+            args = [ "${clientScript}" socket ];
+          };
+          expect.stdout.contains = "pong";
+        };
+      };
     in
     {
       checks.${system} = {
@@ -154,6 +193,7 @@
           };
         };
       });
+      packages.${system}."test.rpc" = suite.packages."test.rpc";
       # Deliberately failing derivation used solely to prove that failed
       # assertions cause nix build to fail. Not part of the required checks.
       packages.${system}.assertion-fails = ciLib.mkTest {
