@@ -2,8 +2,9 @@ let
   mkTest = import ./mk-test.nix;
   pkgs = {
     python3 = "/nix/store/fake-python";
-    runCommand = name: attrs: script: { inherit name attrs script; };
-    linkFarm = name: entries: "/nix/store/fake-runner";
+    runCommand = name: attrs: script:
+      if name == "phenix-test-runner" then "/nix/store/fake-runner"
+      else { inherit name attrs script; };
     writeText = name: content: "/nix/store/fake-test-spec";
     writeShellApplication = attrs: attrs;
   };
