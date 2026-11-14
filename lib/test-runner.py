@@ -444,12 +444,11 @@ def main():
     if evidence["status"] == "invalid":
         print(f"INVALID: {evidence['reason']}", file=sys.stderr)
     print(json.dumps(evidence, sort_keys=True, ensure_ascii=False))
-    if evidence["status"] == "pass":
-        out = Path(args.output)
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "result.json").write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
-        return 0
-    return 2 if evidence["status"] == "invalid" else 1
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+    # Runtime CI must retain failing cases too; Nix build failures still fail closed.
+    (out / "result.json").write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+    return 0 if evidence["status"] == "pass" else (2 if evidence["status"] == "invalid" else 1)
 
 
 if __name__ == "__main__":
