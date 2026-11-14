@@ -226,7 +226,7 @@ class RunnerTests(unittest.TestCase):
         server = (
             "import socket,sys; "
             "s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(5); "
-            "\\nwhile True:\\n c,_=s.accept(); data=c.recv(1024); c.sendall(b'pong' if data == b'ping' else b'bad'); c.close()"
+            "\nwhile True:\n c,_=s.accept(); data=c.recv(1024); c.sendall(b'pong' if data == b'ping' else b'bad'); c.close()"
         )
         client = (
             "import socket,sys; s=socket.socket(socket.AF_UNIX); "
