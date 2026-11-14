@@ -37,10 +37,13 @@ let
   spec = { inherit name expect env fixtures sockets services; }
     // (if command != null then { inherit command; } else { inherit steps; });
   specFile = pkgs.writeText "test-${name}.json" (builtins.toJSON spec);
-  runner = pkgs.linkFarm "phenix-test-runner" [
-    { name = "test-runner.py"; path = ./test-runner.py; }
-    { name = "test_services.py"; path = ./test_services.py; }
-  ];
+  # Copy both modules into one real directory: CPython resolves script
+  # symlinks before constructing sys.path, so linkFarm is insufficient.
+  runner = pkgs.runCommand "phenix-test-runner" { } ''
+    mkdir -p "$out"
+    cp ${./test-runner.py} "$out/test-runner.py"
+    cp ${./test_services.py} "$out/test_services.py"
+  '';
 in
 assert valid;
 if execution == "build" then
