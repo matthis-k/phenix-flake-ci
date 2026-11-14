@@ -75,6 +75,10 @@ elif args[0] == "run":
     assert "--offline" in args and "--no-substitute" in args
     assert args[args.index("--max-jobs") + 1] == "0"
     assert pathlib.Path(os.environ["IMPORTED"]).exists()
+    directory = pathlib.Path(os.environ["PHENIX_TEST_OUTPUT"])
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "result.json").write_text(json.dumps(
+        {"status": "pass", "assertions": [{"assertion": "main.exitCode", "pass": True}]}))
 else:
     sys.exit(10)
 ''')
@@ -95,6 +99,10 @@ else:
                 self.assertEqual([call[1] for call in calls],
                                  ["path-info", "--export", "--import", "path-info", "run"])
                 self.assertEqual(subject.load(run_args.output)["status"], "pass")
+                self.assertEqual(subject.load(run_args.output)["runtime"]["status"], "pass")
+                self.assertEqual(
+                    subject.load(run_args.output)["runtime"]["assertions"][0]["assertion"],
+                    "main.exitCode")
                 for failure in ("--export", "--import", "path-info", "run"):
                     with self.subTest(failure=failure), mock.patch.dict(os.environ, {"FAIL": failure}):
                         before = len((root / "calls").read_text().splitlines())
