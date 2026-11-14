@@ -164,6 +164,58 @@ class DagTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not cover"):
                 dag.verify_command(proof)
 
+    def test_checks_and_test_packages_share_one_compilation_graph(self):
+        import hashlib
+        plan = mkplan()
+        graph = dag.graph_summary(plan, mkgraph())
+        test_inventory = {
+            "schemaVersion": 1, "commit": SHA, "system": "x86_64-linux",
+            "tests": {"rpc": {"drv": drv("r", "rpc"),
+                               "out": output("r", "rpc")}}}
+        test_inventory["digest"] = hashlib.sha256(json.dumps(
+            test_inventory, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            dag.save(directory / "plan.json", plan)
+            dag.save(directory / "graph.json", graph)
+            dag.save(directory / "tests.json", test_inventory)
+            args = type("Args", (), {"plan": directory / "plan.json",
+                                     "graph": directory / "graph.json",
+                                     "test_packages": directory / "tests.json",
+                                     "test_root": str(directory / "roots"),
+                                     "output": directory / "build.json"})
+            raw = [
+                {"drvPath": drv("a", "a"), "outputs": {"out": output("f", "a")}},
+                {"drvPath": drv("b", "b"), "outputs": {"out": output("g", "b")}},
+                {"drvPath": drv("c", "shipping"), "outputs": {"out": output("h", "ship")}},
+                {"drvPath": drv("r", "rpc"), "outputs": {"out": output("r", "rpc")}},
+            ]
+            with mock.patch.object(dag.planner, "run_command", return_value=SHA), mock.patch.object(
+                    dag.subprocess, "check_output", return_value=json.dumps(raw)) as build, mock.patch.object(
+                    dag.subprocess, "run") as pinned:
+                dag.build_command(args)
+            build.assert_called_once_with(
+                ["nix", "build", "--no-link", "--json", "-L",
+                 ".#checks.x86_64-linux.a", ".#checks.x86_64-linux.b",
+                 ".#checks.x86_64-linux.shipping",
+                 '.#packages.x86_64-linux."test.rpc"'], text=True)
+            pinned.assert_called_once_with(
+                ["nix", "build", "--offline", "--no-substitute", "--max-jobs", "0",
+                 "--option", "builders", "", "--out-link", str(directory / "roots"),
+                 '.#packages.x86_64-linux."test.rpc"'], check=True)
+            self.assertEqual(set(dag.load(args.output)["checks"]), set(plan["checks"]))
+
+            test_inventory["commit"] = "b" * 40
+            test_inventory["digest"] = hashlib.sha256(json.dumps(
+                {k: v for k, v in test_inventory.items() if k != "digest"},
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            dag.save(args.test_packages, test_inventory)
+            with mock.patch.object(dag.planner, "run_command", return_value=SHA), mock.patch.object(
+                    dag.subprocess, "check_output") as should_not_build:
+                with self.assertRaisesRegex(ValueError, "exact-head"):
+                    dag.build_command(args)
+                should_not_build.assert_not_called()
+
     def test_nix_results_fail_closed_on_missing_output_or_forged_drv(self):
         plan = mkplan()
         checks = plan["checks"]
