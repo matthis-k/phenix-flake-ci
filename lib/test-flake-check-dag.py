@@ -203,7 +203,7 @@ class DagTests(unittest.TestCase):
                 ["nix", "build", "--offline", "--no-substitute", "--max-jobs", "0",
                  "--option", "builders", "", "--out-link", str(directory / "roots"),
                  '.#packages.x86_64-linux."test.rpc"'], check=True)
-            self.assertEqual(set(dag.load(args.output)["checks"]), set(plan["checks"]))
+            self.assertEqual(set(json.loads(args.output.read_text())["checks"]), set(plan["checks"]))
 
             test_inventory["commit"] = "b" * 40
             test_inventory["digest"] = hashlib.sha256(json.dumps(
