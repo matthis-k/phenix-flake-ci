@@ -2,7 +2,11 @@ let
   mkTest = import ./mk-test.nix;
   pkgs = {
     python3 = "/nix/store/fake-python";
-    runCommand = name: attrs: script: { inherit name attrs script; };
+    runCommand = name: attrs: script:
+      if name == "phenix-test-runner" then "/nix/store/fake-runner"
+      else { inherit name attrs script; };
+    writeText = name: content: "/nix/store/fake-test-spec";
+    writeShellApplication = attrs: attrs;
   };
   simple = mkTest {
     inherit pkgs;
@@ -40,6 +44,44 @@ let
   };
   sequenceSpec = builtins.fromJSON sequence.attrs.testSpec;
 
+  runtime = mkTest {
+    inherit pkgs;
+    name = "rpc-smoke";
+    execution = "runtime";
+    sockets = [ "rpc" ];
+    services.server = {
+      command = {
+        program = "/nix/store/server/bin/server";
+        args = [ { ref = { fixture = "rpc"; field = "path"; }; } ];
+      };
+      ready.unixSocket = "rpc";
+    };
+    command = {
+      program = "/nix/store/client/bin/client";
+      args = [ { ref = { fixture = "rpc"; field = "path"; }; } ];
+    };
+  };
+  invalidExecution = builtins.tryEval (builtins.deepSeq (mkTest {
+    inherit pkgs;
+    name = "bad";
+    execution = "unknown";
+    command.program = "/bin/true";
+  }) true);
+
+  ref = (import ./test-ref.nix).socket "rpc";
+  suite = (import ./mk-test-suite.nix) {
+    inherit pkgs;
+    tests = {
+      rpc = {
+        sockets = [ "rpc" ];
+        command = { program = "/bin/true"; args = [ ref ]; };
+      };
+      format = {
+        execution = "build";
+        command.program = "/bin/true";
+      };
+    };
+  };
   invalidBoth = builtins.tryEval (builtins.deepSeq (mkTest {
     inherit pkgs;
     name = "bad";
@@ -101,6 +143,20 @@ let
 
 in
 {
+  mkSuiteProjectsOneInventory =
+    assert builtins.attrNames suite.packages == [ "test.rpc" ];
+    assert builtins.attrNames suite.checks == [ "format" ];
+    assert suite.packages."test.rpc".name == "test-rpc";
+    assert suite.checks.format.name == "test-format";
+    assert ref == { ref = { fixture = "rpc"; field = "path"; }; };
+    true;
+
+  mkTestProducesRunnablePackage = 
+    assert runtime.name == "test-rpc-smoke";
+    assert builtins.match ".*test-runner.py.*" runtime.text != null;
+    assert !invalidExecution.success;
+    true;
+
   mkTestCreatesCheckDerivation = 
     assert simple.name == "test-cli-contract";
     assert simple.attrs.passAsFile == [ "testSpec" ];

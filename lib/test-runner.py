@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 
+from test_services import ServiceError, ServiceGroup, validate as validate_services
+
 
 class InvalidSpec(ValueError):
     pass
@@ -30,10 +32,14 @@ def is_reference(value):
     return isinstance(value, dict) and set(value) == {"ref"}
 
 
-def validate_references(value, available, where):
+def validate_references(value, available, where, fixtures=()):
     """Reject forward/unknown references before executing any command."""
     if is_reference(value):
         ref = value["ref"]
+        if isinstance(ref, dict) and set(ref) == {"fixture", "field"}:
+            require(ref["field"] == "path" and ref["fixture"] in fixtures,
+                    f"{where}: unknown fixture path reference")
+            return
         require(isinstance(ref, dict) and set(ref) in (
             {"step", "field"}, {"step", "field", "json"}),
             f"{where}: ref needs step, field and optional json")
@@ -46,10 +52,10 @@ def validate_references(value, available, where):
             validate_pointer(ref["json"])
     elif isinstance(value, dict):
         for key, item in value.items():
-            validate_references(item, available, f"{where}.{key}")
+            validate_references(item, available, f"{where}.{key}", fixtures)
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            validate_references(item, available, f"{where}[{index}]")
+            validate_references(item, available, f"{where}[{index}]", fixtures)
 
 
 def validate_pointer(location):
@@ -59,9 +65,11 @@ def validate_pointer(location):
             f"invalid JSON pointer escape: {location!r}")
 
 
-def materialize_refs(value, observations):
+def materialize_refs(value, observations, fixtures=None):
     if is_reference(value):
         ref = value["ref"]
+        if "fixture" in ref:
+            return (fixtures or {})[ref["fixture"]]
         observed = observations.get(ref["step"], {})
         if ref["field"] not in observed:
             raise MissingReference(f"{ref['step']}.{ref['field']} not available")
@@ -73,9 +81,9 @@ def materialize_refs(value, observations):
                 raise MissingReference(f"{ref['step']}.{ref['field']} JSON {ref['json']!r}: {error}") from error
         return actual
     if isinstance(value, list):
-        return [materialize_refs(item, observations) for item in value]
+        return [materialize_refs(item, observations, fixtures) for item in value]
     if isinstance(value, dict):
-        return {key: materialize_refs(item, observations) for key, item in value.items()}
+        return {key: materialize_refs(item, observations, fixtures) for key, item in value.items()}
     return value
 
 
@@ -232,6 +240,12 @@ def test(spec):
         require(isinstance(steps, list) and bool(steps), "steps must be a nonempty list")
         final_expect = spec.get("expect", {})
     require(isinstance(final_expect, dict), "expect must be an attribute set")
+    sockets = spec.get("sockets", [])
+    services = spec.get("services", {})
+    try:
+        validate_services(sockets, services, validate_command, validate_references)
+    except ValueError as error:
+        raise InvalidSpec(str(error)) from error
     # Validate every reference and command shape before any side effect.
     seen = set()
     for index, step in enumerate(steps):
@@ -241,7 +255,7 @@ def test(spec):
                 f"step[{index}].id is invalid")
         require(sid not in seen, f"duplicate step ID: {sid}")
         argv, _ = validate_command(step.get("command"), sid)
-        validate_references(argv, seen, f"{sid}.command")
+        validate_references(argv, seen, f"{sid}.command", set(sockets))
         validate_references(step.get("expect", {}), seen, f"{sid}.expect")
         seen.add(sid)
     validate_references(final_expect, seen, "expect")
@@ -259,83 +273,93 @@ def test(spec):
         require(isinstance(env, dict) and all(isinstance(k, str) and isinstance(v, str)
                                                for k, v in env.items()), "env must contain strings")
         environment = dict(os.environ, **env)
-        ids = set()
-        for index, step in enumerate(steps):
-            label = f"step[{index}]"
-            require(isinstance(step, dict), f"{label} must be an attribute set")
-            sid = step.get("id", f"step-{index}")
-            require(isinstance(sid, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", sid) is not None,
-                    f"{label}.id is invalid")
-            require(sid not in ids, f"duplicate step ID: {sid}")
-            ids.add(sid)
-            argv, timeout = validate_command(step.get("command"), sid)
-            try:
-                argv = materialize_refs(argv, observations)
-                if not all(isinstance(arg, str) for arg in argv):
-                    raise MissingReference("command argument resolved to a non-string; select a string field")
-            except MissingReference as error:
-                failures.append({"assertion": f"{sid}.execution", "pass": False,
-                                 "reason": f"cannot resolve command argument: {error}"})
-                observations[sid] = {}
-                continue
-            expected = step.get("expect", {})
-            require(isinstance(expected, dict), f"{sid}.expect must be an attribute set")
-            require(set(expected) <= {"exitCode", "stdout", "stderr", "files"},
-                    f"{sid}.expect has unknown observations")
-            try:
-                run = subprocess.run(argv, cwd=root, env=environment,
-                                     capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
-                observed = {"exitCode": run.returncode, "stdout": run.stdout, "stderr": run.stderr}
-            except subprocess.TimeoutExpired as error:
-                observed = {"timeout": True, "stdout": error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or "",
-                            "stderr": error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""}
-                failures.append({"assertion": f"{sid}.execution", "pass": False, "reason": f"timed out after {timeout}s"})
-            except OSError as error:
-                observed = {}
-                failures.append({"assertion": f"{sid}.execution", "pass": False, "reason": str(error)})
-            observations[sid] = observed
-            if "exitCode" not in observed:
-                continue
-            check({"exitCode": expected.get("exitCode", 0)}, observed, sid, failures, results, observations)
-            for channel in ("stdout", "stderr"):
-                if channel not in expected:
-                    continue
-                tests = expected[channel]
-                require(isinstance(tests, dict), f"{sid}.{channel} must be an attribute set")
-                require(set(tests) <= {"empty", "contains", "matches", "eq", "ne", "json"},
-                        f"{sid}.{channel} has unknown assertions")
-                if "json" in tests:
-                    require(isinstance(tests["json"], dict), f"{sid}.{channel}.json must be an attribute set")
+        group = ServiceGroup(
+            root, sockets, services, environment,
+            lambda program, args: materialize_refs([program, *args], {}, group.sockets))
+        try:
+            with group as resolved_sockets:
+                ids = set()
+                for index, step in enumerate(steps):
+                    label = f"step[{index}]"
+                    require(isinstance(step, dict), f"{label} must be an attribute set")
+                    sid = step.get("id", f"step-{index}")
+                    require(isinstance(sid, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", sid) is not None,
+                            f"{label}.id is invalid")
+                    require(sid not in ids, f"duplicate step ID: {sid}")
+                    ids.add(sid)
+                    argv, timeout = validate_command(step.get("command"), sid)
                     try:
-                        document = json.loads(observed[channel])
-                        for location, predicate in tests["json"].items():
+                        argv = materialize_refs(argv, observations, resolved_sockets)
+                        if not all(isinstance(arg, str) for arg in argv):
+                            raise MissingReference("command argument resolved to a non-string; select a string field")
+                    except MissingReference as error:
+                        failures.append({"assertion": f"{sid}.execution", "pass": False,
+                                         "reason": f"cannot resolve command argument: {error}"})
+                        observations[sid] = {}
+                        continue
+                    expected = step.get("expect", {})
+                    require(isinstance(expected, dict), f"{sid}.expect must be an attribute set")
+                    require(set(expected) <= {"exitCode", "stdout", "stderr", "files"},
+                            f"{sid}.expect has unknown observations")
+                    try:
+                        run = subprocess.run(argv, cwd=root, env=environment,
+                                             capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
+                        observed = {"exitCode": run.returncode, "stdout": run.stdout, "stderr": run.stderr}
+                    except subprocess.TimeoutExpired as error:
+                        observed = {"timeout": True, "stdout": error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or "",
+                                    "stderr": error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""}
+                        failures.append({"assertion": f"{sid}.execution", "pass": False, "reason": f"timed out after {timeout}s"})
+                    except OSError as error:
+                        observed = {}
+                        failures.append({"assertion": f"{sid}.execution", "pass": False, "reason": str(error)})
+                    observations[sid] = observed
+                    if "exitCode" not in observed:
+                        continue
+                    check({"exitCode": expected.get("exitCode", 0)}, observed, sid, failures, results, observations)
+                    for channel in ("stdout", "stderr"):
+                        if channel not in expected:
+                            continue
+                        tests = expected[channel]
+                        require(isinstance(tests, dict), f"{sid}.{channel} must be an attribute set")
+                        require(set(tests) <= {"empty", "contains", "matches", "eq", "ne", "json"},
+                                f"{sid}.{channel} has unknown assertions")
+                        if "json" in tests:
+                            require(isinstance(tests["json"], dict), f"{sid}.{channel}.json must be an attribute set")
                             try:
-                                actual = pointer(document, location)
-                                check({location: predicate}, {location: actual},
-                                      f"{sid}.{channel}.json", failures, results, observations)
-                            except (KeyError, IndexError, TypeError) as error:
-                                result = {"assertion": f"{sid}.{channel}.json.{location}", "pass": False,
-                                          "reason": f"missing JSON location: {error}"}
+                                document = json.loads(observed[channel])
+                                for location, predicate in tests["json"].items():
+                                    try:
+                                        actual = pointer(document, location)
+                                        check({location: predicate}, {location: actual},
+                                              f"{sid}.{channel}.json", failures, results, observations)
+                                    except (KeyError, IndexError, TypeError) as error:
+                                        result = {"assertion": f"{sid}.{channel}.json.{location}", "pass": False,
+                                                  "reason": f"missing JSON location: {error}"}
+                                        results.append(result)
+                                        failures.append(result)
+                            except json.JSONDecodeError as error:
+                                result = {"assertion": f"{sid}.{channel}.json", "pass": False,
+                                          "reason": f"invalid JSON: {error}"}
                                 results.append(result)
                                 failures.append(result)
-                    except json.JSONDecodeError as error:
-                        result = {"assertion": f"{sid}.{channel}.json", "pass": False,
-                                  "reason": f"invalid JSON: {error}"}
-                        results.append(result)
-                        failures.append(result)
-                ordinary = {key: val for key, val in tests.items() if key != "json"}
-                for operation, expected_value in ordinary.items():
-                    observation = len(observed[channel]) == 0 if operation == "empty" else observed[channel]
-                    predicate = expected_value if operation == "empty" else {operation: expected_value}
-                    check({operation: predicate}, {operation: observation},
-                          f"{sid}.{channel}", failures, results, observations)
-            if "files" in expected:
-                verify_files(root, expected["files"], f"{sid}.files", failures, results, observations)
-        require(set(final_expect) <= {"files"}, "top-level expect supports only files for multi-step tests")
-        if "files" in final_expect:
-            verify_files(root, final_expect["files"], "files", failures, results, observations)
+                        ordinary = {key: val for key, val in tests.items() if key != "json"}
+                        for operation, expected_value in ordinary.items():
+                            observation = len(observed[channel]) == 0 if operation == "empty" else observed[channel]
+                            predicate = expected_value if operation == "empty" else {operation: expected_value}
+                            check({operation: predicate}, {operation: observation},
+                                  f"{sid}.{channel}", failures, results, observations)
+                    if "files" in expected:
+                        verify_files(root, expected["files"], f"{sid}.files", failures, results, observations)
+                require(set(final_expect) <= {"files"}, "top-level expect supports only files for multi-step tests")
+                if "files" in final_expect:
+                    verify_files(root, final_expect["files"], "files", failures, results, observations)
+        except ServiceError as error:
+            failures.append({"assertion": "services.startup", "pass": False,
+                             "reason": str(error)})
+        service_evidence = group.evidence()
     return {"name": spec.get("name", "test"), "status": "fail" if failures else "pass",
-            "assertions": results, "failures": failures, "steps": list(observations)}
+            "assertions": results, "failures": failures, "steps": list(observations),
+            "services": service_evidence}
 
 
 def verify_files(root, files, prefix, failures, results, observations):
@@ -420,12 +444,11 @@ def main():
     if evidence["status"] == "invalid":
         print(f"INVALID: {evidence['reason']}", file=sys.stderr)
     print(json.dumps(evidence, sort_keys=True, ensure_ascii=False))
-    if evidence["status"] == "pass":
-        out = Path(args.output)
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "result.json").write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
-        return 0
-    return 2 if evidence["status"] == "invalid" else 1
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+    # Runtime CI must retain failing cases too; Nix build failures still fail closed.
+    (out / "result.json").write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+    return 0 if evidence["status"] == "pass" else (2 if evidence["status"] == "invalid" else 1)
 
 
 if __name__ == "__main__":

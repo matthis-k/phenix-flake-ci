@@ -197,3 +197,78 @@ nix flake check -L
 ```
 
 The repo CI workflow runs the Python conformance tests and Nix evaluation. The existing CI backends discover and build the test derivations; the library does not introduce a second test registry or job scheduler.
+
+## Runtime execution without recompilation
+
+`mkTest` now has an explicit execution role:
+
+- `execution = "build"` (default for direct `mkTest`): creates an ordinary Nix check derivation and runs the assertions during its build. Suitable for deterministic/cacheable checks.
+- `execution = "runtime"`: produces an executable Nix package containing the test specification and runner. The **package build does not execute the test**. Use it under `packages.${system}."test.<id>"` so the distributed CI workflow compiles its closure at the build barrier and executes it in a tester job.
+
+Prefer `mkSuite` for a single project test inventory. It defaults each declared test to runtime execution, while `execution = "build"` projects into `checks`:
+
+```nix
+let
+  suite = ciLib.mkSuite {
+    inherit pkgs;
+    tests = {
+      smoke = {
+        command.program = lib.getExe packages.cli;
+        command.args = [ "status" ];
+        expect.stdout.contains = "ready";
+      };
+      format = {
+        execution = "build";
+        command.program = lib.getExe packages.formatCheck;
+      };
+    };
+  };
+in {
+  packages.${system} = suite.packages; # "test.smoke"
+  checks.${system} = suite.checks;     # format
+}
+```
+
+The existing `test.*` package discovery, build barrier, closure transfer and offline Nix execution handle runtime packages. The current workflow may choose to execute one package per job; test batching and capability routing are future extensions, not implicit in `mkSuite`.
+
+### Managed local processes and Unix sockets
+
+Simple process-level integration tests reuse the **same** command, expectation and step-reference engine as ordinary `mkTest` tests.
+
+```nix
+let
+  socket = ciLib.testRef.socket "rpc";
+  suite = ciLib.mkSuite {
+    inherit pkgs;
+    tests.handshake = {
+      sockets = [ "rpc" ];
+      services.server = {
+        command = {
+          program = lib.getExe server;
+          args = [ "--socket" socket ];
+        };
+        ready = { unixSocket = "rpc"; timeoutSeconds = 5; };
+      };
+      command = {
+        program = lib.getExe client;
+        args = [ "--socket" socket "ping" ];
+      };
+      expect.stdout.contains = "pong";
+    };
+  };
+in suite
+```
+
+The fixture reference is **tagged data**, not shell interpolation. The runner allocates a fresh temporary socket path, substitutes it into commands, launches the server without a shell, waits for the socket to be bound, runs the client, captures bounded server stdout/stderr tails, and terminates the server process group even when assertions fail. A readiness timeout or premature server exit fails the test and blocks client execution.
+
+Current readiness means *a Unix socket has been created*, not a successful application-level handshake. To verify a working protocol, the test command must connect and assert a response. Unix sockets are the first supported managed resource; TCP port leases, VM/container environments and fixture-sharing scopes are not yet implemented. Managed service environments accept only string values and no implicit secrets.
+
+To verify preparation and execution separately:
+
+```console
+nix build --no-link '.#packages.x86_64-linux."test.handshake"'
+nix run --offline --no-substitute --max-jobs 0 '.#packages.x86_64-linux."test.handshake"'
+```
+
+The second command intentionally fails if required outputs are missing rather than silently building them. Set `PHENIX_TEST_OUTPUT` to a writable directory to retain a passing result document. Failures emit machine-readable JSON to stdout and detailed diagnostics to stderr; CI's existing evidence gate still owns run-level acceptance.
+

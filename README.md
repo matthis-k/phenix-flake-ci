@@ -10,6 +10,14 @@ Use `ciLib.mkTest` to create a regular Nix `checks.<system>` derivation from a c
 
 See [Declarative tests](docs/declarative-tests.md) for the API, assertion operations, and examples. These checks are discovered by the existing flake planner; no separate workflow test registry is required.
 
+The same `mkTest` assertion model supports prebuilt **runtime tests** with
+`execution = "runtime"`. The `mkSuite` helper lowers one `tests` inventory into
+`packages.<system>."test.<name>"` (runtime by default) and `checks.<system>.<name>`
+(explicit `execution = "build"`). Managed Unix-socket services share the same
+assertion runner for cross-process integration tests. The remote Nix workflow
+prebuilds these packages before dispatching testers. See
+[Runtime execution and managed services](docs/declarative-tests.md#runtime-execution-without-recompilation).
+
 ## Semantic phases
 
 `mkCi` classifies suites with five phase names:
