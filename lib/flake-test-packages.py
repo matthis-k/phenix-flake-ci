@@ -177,7 +177,9 @@ def run_command(args):
     # A generic executable may omit detailed output. Declarative mkTest
     # packages additionally write structured per-case evidence here.
     runtime_dir = Path(args.output).parent / "runtime-result"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     runtime_report = runtime_dir / "result.json"
+    runtime_report.unlink(missing_ok=True)  # Never accept stale evidence from an earlier attempt.
     environment = dict(os.environ, PHENIX_TEST_OUTPUT=str(runtime_dir.resolve()))
     try:
         subprocess.run(["nix", "run", "--offline", "--no-substitute", "--max-jobs", "0", "--no-write-lock-file",
@@ -189,7 +191,11 @@ def run_command(args):
         result["status"] = "pass"
     finally:
         if runtime_report.exists():
-            result["runtime"] = load(runtime_report)
+            try:
+                result["runtime"] = load(runtime_report)
+            except (ValueError, OSError) as error:
+                result["runtimeError"] = f"cannot read runtime test report: {error}"
+                result["status"] = "failed"
         save(args.output, result)
     print(f"PASS: runnable test package {args.name}")
 
