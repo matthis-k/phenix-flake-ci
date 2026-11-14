@@ -256,9 +256,9 @@ def test(spec):
         require(sid not in seen, f"duplicate step ID: {sid}")
         argv, _ = validate_command(step.get("command"), sid)
         validate_references(argv, seen, f"{sid}.command", set(sockets))
-        validate_references(step.get("expect", {}), seen, f"{sid}.expect", set(sockets))
+        validate_references(step.get("expect", {}), seen, f"{sid}.expect")
         seen.add(sid)
-    validate_references(final_expect, seen, "expect", set(sockets))
+    validate_references(final_expect, seen, "expect")
     failures, results, observations = [], [], {}
     with tempfile.TemporaryDirectory(prefix="phenix-test-") as temp:
         root = Path(temp).resolve()
