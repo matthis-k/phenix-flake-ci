@@ -60,6 +60,26 @@ jobs:
             nix run --no-write-lock-file --offline --no-substitute --max-jobs 0 "$target"
           done
 
+      - name: Exercise full exact-head runtime package plan, NAR and evidence path
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          (
+            cd tests/declarative-test-consumer
+            runner=../../lib/flake-test-packages.py
+            python3 "$runner" plan --system x86_64-linux --output "$tmp/plan.json"
+            python3 "$runner" build --plan "$tmp/plan.json" --root "$tmp/test-roots"
+            python3 "$runner" export --plan "$tmp/plan.json" --output "$tmp/closure.nar"
+            for case in rpc rpc-repeat; do
+              mkdir -p "$tmp/results/$case"
+              python3 "$runner" run --plan "$tmp/plan.json" \
+                --name "$case" --closure "$tmp/closure.nar" \
+                --output "$tmp/results/$case/evidence.json"
+            done
+            python3 "$runner" verify --plan "$tmp/plan.json" --results "$tmp/results"
+          )
+
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
 
