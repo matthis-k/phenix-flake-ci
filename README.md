@@ -15,8 +15,12 @@ The same `mkTest` assertion model supports prebuilt **runtime tests** with
 `packages.<system>."test.<name>"` (runtime by default) and `checks.<system>.<name>`
 (explicit `execution = "build"`). Managed Unix-socket services share the same
 assertion runner for cross-process integration tests. The remote Nix workflow
-prebuilds these packages before dispatching testers. See
-[Runtime execution and managed services](docs/declarative-tests.md#runtime-execution-without-recompilation).
+prebuilds these packages before dispatching testers. Repeated setup can be
+declared once with `mkSuite.defaults` (shared commands, fixtures, environments,
+services and socket allocations); the same pure normalization underpins
+`mkTestCases`. Runtime command output is bounded by default, and test
+inventories exceeding GitHub's matrix limit are rejected during planning.
+See [Runtime execution and managed services](docs/declarative-tests.md#runtime-execution-without-recompilation).
 
 ## Semantic phases
 
