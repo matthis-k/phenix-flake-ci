@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 
-from test_services import ServiceError, ServiceGroup, validate as validate_services
+from test_services import ServiceError, ServiceGroup, run_isolated, validate as validate_services
 
 
 class InvalidSpec(ValueError):
@@ -302,8 +302,7 @@ def test(spec):
                     require(set(expected) <= {"exitCode", "stdout", "stderr", "files"},
                             f"{sid}.expect has unknown observations")
                     try:
-                        run = subprocess.run(argv, cwd=root, env=environment,
-                                             capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
+                        run = run_isolated(argv, cwd=root, env=environment, timeout=timeout)
                         observed = {"exitCode": run.returncode, "stdout": run.stdout, "stderr": run.stderr}
                     except subprocess.TimeoutExpired as error:
                         observed = {"timeout": True, "stdout": error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or "",
