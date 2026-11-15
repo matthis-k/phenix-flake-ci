@@ -15,15 +15,19 @@ import re
 import subprocess
 import sys
 
-SCHEMA = 1
+SCHEMA = 2
 MAX_MATRIX_JOBS = 256  # GitHub Actions job-matrix hard limit.
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-STORE = re.compile(r"/nix/store/[a-z0-9]{32}-[^\s]+\Z")
+STORE = re.compile(r"/nix/store/[a-z0-9]{32}-[A-Za-z0-9+._?=-]+\Z")
+EXE_NAME = re.compile(r"[A-Za-z0-9_+.-]+\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 EVAL = (
     'pkgs: builtins.listToAttrs (builtins.map (name: '
-    '{ inherit name; value = let pkg = builtins.getAttr name pkgs; in '
-    '{ drv = pkg.drvPath; out = pkg.outPath; }; }) '
+    '{ inherit name; value = let pkg = builtins.getAttr name pkgs; '
+    'program = (pkg.meta or {}).mainProgram or '
+    '(pkg.pname or (builtins.parseDrvName pkg.name).name); in '
+    '{ drv = pkg.drvPath; out = pkg.outPath; '
+    'exe = "${pkg.outPath}/bin/${program}"; }; }) '
     '(builtins.filter (name: '
     'builtins.match "test[.][A-Za-z0-9][A-Za-z0-9_-]*" name != null) '
     '(builtins.attrNames pkgs)))'
@@ -76,11 +80,17 @@ def validate(plan):
     for name, entry in tests.items():
         if not isinstance(name, str) or not NAME.fullmatch(name):
             raise ValueError("invalid test package name")
-        if not isinstance(entry, dict) or set(entry) != {"drv", "out"}:
-            raise ValueError("test package must expose derivation and output paths")
+        if not isinstance(entry, dict) or set(entry) != {"drv", "out", "exe"}:
+            raise ValueError("test package must expose derivation, output and executable paths")
         if not all(isinstance(entry[k], str) and STORE.fullmatch(entry[k])
                    for k in ("drv", "out")) or not entry["drv"].endswith(".drv"):
             raise ValueError("invalid Nix test package derivation or output path")
+        exe = entry["exe"]
+        if not isinstance(exe, str) or not exe.startswith(entry["out"] + "/bin/"):
+            raise ValueError("test executable must be inside the planned Nix store output")
+        executable_name = exe[len(entry["out"]) + len("/bin/"):]
+        if executable_name in (".", "..") or not EXE_NAME.fullmatch(executable_name):
+            raise ValueError("invalid Nix test executable name")
     if plan.get("digest") != digest({k: v for k, v in plan.items()
                                     if k != "digest"}):
         raise ValueError("test-package plan digest mismatch")
@@ -115,9 +125,10 @@ def plan_command(args):
     print(f"Discovered {len(inventory)} runnable test.* packages at {commit}")
 
 
-def verify_head(plan):
-    if git_head() != plan["commit"]:
-        raise ValueError("test-package checkout is not the planned exact head")
+def verify_head(plan, expected_commit=None):
+    actual = git_head() if expected_commit is None else expected_commit
+    if not isinstance(actual, str) or not SHA.fullmatch(actual) or actual != plan["commit"]:
+        raise ValueError("test-package checkout or supplied commit is not the planned exact head")
 
 
 def build_command(args):
@@ -131,11 +142,8 @@ def build_command(args):
         subprocess.run(["nix", "build", "--no-write-lock-file", "-L", "--out-link", args.root,
                         *roots], check=True)
         for name, entry in tests.items():
-            resolved = subprocess.check_output(
-                ["nix", "eval", "--no-write-lock-file", "--raw", "--apply", "p: p.outPath",
-                 target(plan["system"], name)], text=True).strip()
-            if resolved != entry["out"]:
-                raise ValueError(f"test package {name} no longer matches its derivation")
+            if not Path(entry["exe"]).is_file() or not os.access(entry["exe"], os.X_OK):
+                raise ValueError(f"test package {name} has no executable at {entry['exe']}")
         # The Nix build exit status proves every root was realized.
         expected = sorted(set(item["out"] for item in tests.values()))
         actual = subprocess.check_output(
@@ -165,7 +173,7 @@ def export_command(args):
 
 def run_command(args):
     plan = validate(load(args.plan))
-    verify_head(plan)
+    verify_head(plan, getattr(args, "expected_commit", None))
     if args.name not in plan["tests"]:
         raise ValueError("test job not in exact-head package inventory")
     entry = plan["tests"][args.name]
@@ -178,7 +186,8 @@ def run_command(args):
         raise ValueError("test executable missing from restored Nix store")
     result = {"schemaVersion": SCHEMA, "digest": plan["digest"],
               "commit": plan["commit"], "name": args.name,
-              "drv": entry["drv"], "out": entry["out"], "status": "failed"}
+              "drv": entry["drv"], "out": entry["out"], "exe": entry["exe"],
+              "status": "failed"}
     # A generic executable may omit detailed output. Declarative mkTest
     # packages additionally write structured per-case evidence here.
     runtime_dir = Path(args.output).parent / "runtime-result"
@@ -187,8 +196,9 @@ def run_command(args):
     runtime_report.unlink(missing_ok=True)  # Never accept stale evidence from an earlier attempt.
     environment = dict(os.environ, PHENIX_TEST_OUTPUT=str(runtime_dir.resolve()))
     try:
-        subprocess.run(["nix", "run", "--offline", "--no-substitute", "--max-jobs", "0", "--no-write-lock-file",
-                        target(plan["system"], args.name)], env=environment, check=True)
+        # The tester never evaluates a flake or builds; the verified store
+        # output's executable path was frozen during plan evaluation.
+        subprocess.run([entry["exe"]], env=environment, check=True)
         if runtime_report.exists():
             details = load(runtime_report)
             if not isinstance(details, dict) or details.get("status") != "pass":
@@ -222,7 +232,7 @@ def verify_command(args):
         if any(value.get(key) != expected_value for key, expected_value in {
             "schemaVersion": SCHEMA, "digest": plan["digest"],
             "commit": plan["commit"], "name": name, "status": "pass",
-            "drv": item["drv"], "out": item["out"],
+            "drv": item["drv"], "out": item["out"], "exe": item["exe"],
         }.items()):
             raise ValueError("failed, stale or forged test-package evidence")
     if seen != expected:
@@ -246,6 +256,7 @@ def main():
     c.add_argument("--name", required=True)
     c.add_argument("--output", required=True)
     c.add_argument("--closure", required=True)
+    c.add_argument("--expected-commit", help="Exact source SHA for an artifact-only runner")
     c.set_defaults(func=run_command)
     d = subs.add_parser("verify")
     d.add_argument("--plan", required=True)
