@@ -132,7 +132,7 @@ else:
                 if argv != [executable]:
                     return native_run(argv, *args, **kwargs)
                 with open(os.environ["CALLS"], "a") as log:
-                    log.write(json.dumps(["executable", *argv]) + "\\n")
+                    log.write(json.dumps(["executable", *argv]) + "\n")
                 if os.environ.get("FAIL") == "run":
                     raise subprocess.CalledProcessError(9, argv)
                 self.assertTrue(Path(os.environ["IMPORTED"]).exists())
