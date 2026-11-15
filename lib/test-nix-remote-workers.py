@@ -31,8 +31,6 @@ class RemoteBuildersTest(unittest.TestCase):
                 "import json, os, sys\n"
                 "with open(os.environ['CHILD_RECORD'], 'a') as f:\n"
                 "    f.write(json.dumps([sys.argv, os.environ['NIX_CONFIG']]) + '\\n')\n")
-            packages = root / "flake-test-packages.py"
-            packages.write_text(recorder.read_text())
             record = root / "children.jsonl"
             args = [sys.executable, str(source), "build", "--machines", str(machines),
                     "--dag", str(recorder), "--plan", "checks.json", "--graph", "graph.json",
@@ -48,14 +46,14 @@ class RemoteBuildersTest(unittest.TestCase):
             children = [json.loads(line) for line in record.read_text().splitlines()]
             self.assertEqual([child[0] for child in children], [
                 [str(recorder), "build", "--plan", "checks.json", "--graph", "graph.json",
-                 "--output", "evidence.json"],
-                [str(packages), "build", "--plan", "tests.json", "--root", "roots"],
+                 "--output", "evidence.json", "--test-packages", "tests.json",
+                 "--test-root", "roots"],
             ])
             expected = (env["NIX_CONFIG"] + f"\nbuilders = @{machines}\nmax-jobs = 0\n"
                         "builders-use-substitutes = true\n")
-            self.assertEqual([child[1] for child in children], [expected, expected])
+            self.assertEqual([child[1] for child in children], [expected])
             self.assertEqual(json.loads((root / "timing.json").read_text())["workerCount"], 1)
-            packages.write_text("raise SystemExit(7)\n")
+            recorder.write_text("raise SystemExit(7)\n")
             result = subprocess.run(args, env=env, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("exit status 7", result.stderr)
