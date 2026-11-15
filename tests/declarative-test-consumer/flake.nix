@@ -69,7 +69,7 @@
       '';
       suite = ciLib.mkSuite {
         inherit pkgs;
-        tests.rpc = {
+        defaults = {
           sockets = [ "rpc" ];
           services.server = {
             command = {
@@ -82,7 +82,10 @@
             program = "${pkgs.python3}/bin/python";
             args = [ "${clientScript}" socket ];
           };
-          expect.stdout.contains = "pong";
+        };
+        tests = {
+          rpc.expect.stdout.contains = "pong";
+          rpc-repeat.expect.stdout.contains = "pong";
         };
       };
     in
@@ -197,6 +200,7 @@
       # assertions cause nix build to fail. Not part of the required checks.
       packages.${system} = {
         "test.rpc" = suite.packages."test.rpc";
+        "test.rpc-repeat" = suite.packages."test.rpc-repeat";
         assertion-fails = ciLib.mkTest {
         inherit pkgs;
         name = "assertion-fails";
