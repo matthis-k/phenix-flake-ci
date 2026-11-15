@@ -89,7 +89,7 @@ def validate(plan):
 
 def discover_inventory(system):
     raw = subprocess.check_output(
-        ["nix", "eval", "--json", "--apply", EVAL,
+        ["nix", "eval", "--no-write-lock-file", "--json", "--apply", EVAL,
          f".#packages.{system}"], text=True)
     packages = json.loads(raw)
     if not isinstance(packages, dict):
@@ -128,11 +128,11 @@ def build_command(args):
         roots = [target(plan["system"], name) for name in tests]
         # The symlink keeps exactly the executable test output closures live
         # until the shared coordinator's cache-saving post-job hook.
-        subprocess.run(["nix", "build", "-L", "--out-link", args.root,
+        subprocess.run(["nix", "build", "--no-write-lock-file", "-L", "--out-link", args.root,
                         *roots], check=True)
         for name, entry in tests.items():
             resolved = subprocess.check_output(
-                ["nix", "eval", "--raw", "--apply", "p: p.outPath",
+                ["nix", "eval", "--no-write-lock-file", "--raw", "--apply", "p: p.outPath",
                  target(plan["system"], name)], text=True).strip()
             if resolved != entry["out"]:
                 raise ValueError(f"test package {name} no longer matches its derivation")
