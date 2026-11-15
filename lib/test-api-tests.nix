@@ -169,6 +169,13 @@ let
   };
   matrixReady = builtins.fromJSON matrix.ready.attrs.testSpec;
   matrixInvalid = builtins.fromJSON matrix.invalid.attrs.testSpec;
+  invalidRuntimeCase = builtins.tryEval (builtins.deepSeq (mkTestCases {
+    inherit pkgs;
+    cases.runtime = {
+      execution = "runtime";
+      command.program = "/bin/true";
+    };
+  }) true);
   invalidMatrix = builtins.tryEval (builtins.deepSeq (mkTestCases {
     inherit pkgs;
     cases = { };
@@ -241,6 +248,7 @@ in
 
   mkTestCasesRejectsEmptyMatrix =
     assert !invalidMatrix.success;
+    assert !invalidRuntimeCase.success;
     true;
 
   testAssertHelpersProduceOnlyExistingIR =
