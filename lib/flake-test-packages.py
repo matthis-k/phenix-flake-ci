@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 SCHEMA = 1
+MAX_MATRIX_JOBS = 256  # GitHub Actions job-matrix hard limit.
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 STORE = re.compile(r"/nix/store/[a-z0-9]{32}-[^\s]+\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -68,6 +69,10 @@ def validate(plan):
     tests = plan.get("tests")
     if not isinstance(tests, dict):
         raise ValueError("test-package inventory must be an attribute set")
+    if len(tests) > MAX_MATRIX_JOBS:
+        raise ValueError(f"test-package inventory contains {len(tests)} cases; "
+                         f"the GitHub matrix supports at most {MAX_MATRIX_JOBS}. "
+                         "Group related executable tests into suites or add verified batching.")
     for name, entry in tests.items():
         if not isinstance(name, str) or not NAME.fullmatch(name):
             raise ValueError("invalid test package name")

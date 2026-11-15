@@ -29,6 +29,14 @@ def test_plan(**entries):
 
 
 class TestPackageTests(unittest.TestCase):
+    def test_matrix_excess_fails_before_workflow_dispatch(self):
+        plan = test_plan(**{f"case{i}": test_item(f"case{i}") for i in range(257)})
+        with self.assertRaisesRegex(ValueError, "at most 256"):
+            subject.validate(plan)
+        permitted = test_plan(**{f"case{i}": test_item(f"case{i}")
+                                for i in range(256)})
+        self.assertIs(subject.validate(permitted), permitted)
+
     def test_untrusted_staged_dag_executes_all_prebuilt_test_packages(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/flake-dag-staged.yml").read_text()

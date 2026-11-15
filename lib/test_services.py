@@ -6,6 +6,7 @@ commands, assertions, references and evidence.
 import os
 from pathlib import Path
 import re
+import selectors
 import signal
 import subprocess
 import time
@@ -48,34 +49,80 @@ def validate(socket_names, services, validate_command, validate_references):
             raise ValueError(f"service {name}: env must contain strings")
 
 
-def run_isolated(argv, *, cwd, env, timeout):
-    """Run an assertion command with the same process-group safety as services.
+DEFAULT_OUTPUT_LIMIT = 1024 * 1024
+MAX_OUTPUT_LIMIT = 64 * 1024 * 1024
 
-    Every command gets its own group. Descendants cannot keep stdout pipes
-    open forever or survive a timeout/successful command as orphaned workers.
+
+class OutputLimitExceeded(Exception):
+    def __init__(self, channel, limit, stdout, stderr):
+        super().__init__(f"{channel} exceeded maxOutputBytes ({limit} bytes)")
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def run_isolated(argv, *, cwd, env, timeout, max_output_bytes=DEFAULT_OUTPUT_LIMIT):
+    """Run one test step with bounded capture and process-group cleanup.
+
+    Pipes are drained incrementally, so malicious or accidental output cannot
+    consume unbounded memory. Descendants of exited parents are also killed.
     """
     process = subprocess.Popen(
         argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        errors="replace", start_new_session=True)
-    try:
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-            return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired as error:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            stdout, stderr = process.communicate()
-            raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from error
-    finally:
-        # The leader may have exited while grandchildren remain in the group.
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    deadline = time.monotonic() + timeout
+
+    def decoded():
+        return {name: value.decode("utf-8", errors="replace")
+                for name, value in buffers.items()}
+
+    def terminate_group():
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+    try:
+        with selectors.DefaultSelector() as selector:
+            for channel, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, channel)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                events = selector.select(min(remaining, 0.1))
+                if not events and process.poll() is not None:
+                    # Inherited pipes can stay open after the leader exits.
+                    terminate_group()
+                for key, _ in events:
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    channel = key.data
+                    room = max_output_bytes - len(buffers[channel])
+                    buffers[channel].extend(chunk[:max(0, room)])
+                    if len(chunk) > room:
+                        output = decoded()
+                        raise OutputLimitExceeded(channel, max_output_bytes,
+                                                  output["stdout"], output["stderr"])
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        process.wait(timeout=remaining)
+        output = decoded()
+        return subprocess.CompletedProcess(
+            argv, process.returncode, output["stdout"], output["stderr"])
+    except subprocess.TimeoutExpired as error:
+        output = decoded()
+        raise subprocess.TimeoutExpired(
+            argv, timeout, output=output["stdout"], stderr=output["stderr"]) from error
+    finally:
+        terminate_group()
         process.wait()
+        process.stdout.close()
+        process.stderr.close()
 
 
 class ServiceGroup:

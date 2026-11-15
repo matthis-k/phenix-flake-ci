@@ -16,7 +16,9 @@ import subprocess
 import sys
 import tempfile
 
-from test_services import ServiceError, ServiceGroup, run_isolated, validate as validate_services
+from test_services import (DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT,
+                           OutputLimitExceeded, ServiceError, ServiceGroup,
+                           run_isolated, validate as validate_services)
 
 
 class InvalidSpec(ValueError):
@@ -225,6 +227,9 @@ def validate_command(command, label):
     timeout = command.get("timeoutSeconds", 30)
     require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0,
             f"{label}.command.timeoutSeconds must be positive")
+    max_bytes = command.get("maxOutputBytes", DEFAULT_OUTPUT_LIMIT)
+    require(type(max_bytes) is int and 1 <= max_bytes <= MAX_OUTPUT_LIMIT,
+            f"{label}.command.maxOutputBytes must be an integer from 1 to {MAX_OUTPUT_LIMIT}")
     return [command["program"], *args], timeout
 
 
@@ -302,12 +307,18 @@ def test(spec):
                     require(set(expected) <= {"exitCode", "stdout", "stderr", "files"},
                             f"{sid}.expect has unknown observations")
                     try:
-                        run = run_isolated(argv, cwd=root, env=environment, timeout=timeout)
+                        run = run_isolated(argv, cwd=root, env=environment, timeout=timeout,
+                                           max_output_bytes=step["command"].get("maxOutputBytes",
+                                                                                DEFAULT_OUTPUT_LIMIT))
                         observed = {"exitCode": run.returncode, "stdout": run.stdout, "stderr": run.stderr}
                     except subprocess.TimeoutExpired as error:
                         observed = {"timeout": True, "stdout": error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or "",
                                     "stderr": error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""}
                         failures.append({"assertion": f"{sid}.execution", "pass": False, "reason": f"timed out after {timeout}s"})
+                    except OutputLimitExceeded as error:
+                        observed = {"stdout": error.stdout, "stderr": error.stderr}
+                        failures.append({"assertion": f"{sid}.execution", "pass": False,
+                                         "reason": str(error)})
                     except OSError as error:
                         observed = {}
                         failures.append({"assertion": f"{sid}.execution", "pass": False, "reason": str(error)})

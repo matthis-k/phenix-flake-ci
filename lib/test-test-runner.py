@@ -106,6 +106,63 @@ class RunnerTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+    def test_output_cap_fails_even_when_exit_status_is_success(self):
+        evidence = runner.test({
+            "command": {**self.command("print('x' * 2048)"), "maxOutputBytes": 64},
+            "expect": {"exitCode": 0, "stdout": {"contains": "x"}},
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("stdout exceeded maxOutputBytes", evidence["failures"][0]["reason"])
+        self.assertTrue(evidence["steps"] == ["main"])
+
+    def test_output_cap_can_be_raised_per_command(self):
+        evidence = runner.test({
+            "command": {**self.command("print('x' * 2048)"), "maxOutputBytes": 4096},
+            "expect": {"stdout": {"contains": "x" * 2000}},
+        })
+        self.assertEqual(evidence["status"], "pass", evidence)
+
+    def test_stderr_cap_and_invalid_cap(self):
+        evidence = runner.test({
+            "command": {**self.command("import sys;sys.stderr.write('e' * 2048)"),
+                        "maxOutputBytes": 64},
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("stderr exceeded maxOutputBytes", evidence["failures"][0]["reason"])
+        for value in (False, 0, -1, 0.5, 64 * 1024 * 1024 + 1):
+            with self.subTest(value=value), self.assertRaises(runner.InvalidSpec):
+                runner.test({"command": {**self.command("print('x')"),
+                                         "maxOutputBytes": value}})
+
+    def test_exited_command_parent_does_not_keep_inherited_pipes_open(self):
+        import os
+        import signal
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "orphan.pid"
+            command = (
+                "import pathlib,subprocess,sys;"
+                "child=subprocess.Popen([sys.executable,'-c',"
+                "'import time;time.sleep(30)']);"
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid))"
+            )
+            start = time.monotonic()
+            try:
+                result = runner.test({
+                    "command": {**self.command(command, str(pidfile)),
+                                "timeoutSeconds": 3},
+                })
+                self.assertEqual(result["status"], "pass", result)
+                self.assertLess(time.monotonic() - start, 2.5)
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_command_args_are_not_shell_expanded(self):
         evidence = runner.test({"command": self.command("import sys; print(sys.argv[1])", "literal; $(echo danger)"),
                                 "expect": {"stdout": {"contains": "literal; $(echo danger)"}}})

@@ -272,3 +272,17 @@ nix run --offline --no-substitute --max-jobs 0 '.#packages.x86_64-linux."test.ha
 
 The second command intentionally fails if required outputs are missing rather than silently building them. Set `PHENIX_TEST_OUTPUT` to a writable directory to retain a passing result document. Failures emit machine-readable JSON to stdout and detailed diagnostics to stderr; CI's existing evidence gate still owns run-level acceptance.
 
+### Bounded command output and matrix capacity
+
+Step stdout and stderr are captured incrementally with a **1 MiB default cap
+per stream**. Exceeding either cap fails the test regardless of expected exit
+status; the command's complete process group is terminated. A specific command
+may set `maxOutputBytes = 4194304;` (4 MiB), with a supported maximum of
+64 MiB. This limit applies to captured test-step output, not to service log
+files; service evidence retains bounded tails.
+
+One runtime `test.*` package currently becomes one GitHub Actions matrix job.
+Inventories exceeding GitHub's 256-job limit now fail at planning with a
+clear diagnostic, rather than failing later during matrix expansion.
+Future batching should preserve independent test evidence and reuse the
+existing runtime-package plan and final gate.
