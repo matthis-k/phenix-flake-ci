@@ -19,10 +19,11 @@ D = "/nix/store/" + "a" * 32
 C = "a" * 40
 
 def test_item(name):
-    return {"drv": D + f"-test-{name}.drv", "out": D + f"-test-{name}"}
+    return {"drv": D + f"-test-{name}.drv", "out": D + f"-test-{name}",
+            "exe": D + f"-test-{name}/bin/test-{name}"}
 
 def test_plan(**entries):
-    result = {"schemaVersion": 1, "commit": C,
+    result = {"schemaVersion": subject.SCHEMA, "commit": C,
               "system": "x86_64-linux", "tests": entries}
     result["digest"] = subject.digest(result)
     return result
@@ -112,14 +113,6 @@ elif args[0] == "path-info":
     else:
         assert pathlib.Path(os.environ["IMPORTED"]).exists()
     print(out)
-elif args[0] == "run":
-    assert "--offline" in args and "--no-substitute" in args
-    assert args[args.index("--max-jobs") + 1] == "0"
-    assert pathlib.Path(os.environ["IMPORTED"]).exists()
-    directory = pathlib.Path(os.environ["PHENIX_TEST_OUTPUT"])
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "result.json").write_text(json.dumps(
-        {"status": "pass", "assertions": [{"assertion": "main.exitCode", "pass": True}]}))
 else:
     sys.exit(10)
 ''')
@@ -132,13 +125,33 @@ else:
             export_args = type("Args", (), {"plan": plan, "output": archive})()
             run_args = type("Args", (), {"plan": plan, "closure": archive,
                                         "name": "unit", "output": root / "evidence.json"})()
-            with mock.patch.dict(os.environ, env), mock.patch.object(subject, "git_head", return_value=C):
+            native_run = subprocess.run
+            executable = test_item("unit")["exe"]
+
+            def run_prebuilt(argv, *args, **kwargs):
+                if argv != [executable]:
+                    return native_run(argv, *args, **kwargs)
+                with open(os.environ["CALLS"], "a") as log:
+                    log.write(json.dumps(["executable", *argv]) + "\\n")
+                if os.environ.get("FAIL") == "run":
+                    raise subprocess.CalledProcessError(9, argv)
+                self.assertTrue(Path(os.environ["IMPORTED"]).exists())
+                directory = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "result.json").write_text(json.dumps(
+                    {"status": "pass", "assertions": [
+                        {"assertion": "main.exitCode", "pass": True}]}))
+                return subprocess.CompletedProcess(argv, 0)
+
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                    subject, "git_head", return_value=C), mock.patch.object(
+                    subject.subprocess, "run", side_effect=run_prebuilt):
                 subject.export_command(export_args)
                 self.assertEqual(archive.read_bytes(), b"closure")
                 subject.run_command(run_args)
                 calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
                 self.assertEqual([call[1] for call in calls],
-                                 ["path-info", "--export", "--import", "path-info", "run"])
+                                 ["path-info", "--export", "--import", "path-info", "executable"])
                 self.assertEqual(subject.load(run_args.output)["status"], "pass")
                 self.assertEqual(subject.load(run_args.output)["runtime"]["status"], "pass")
                 self.assertEqual(
@@ -155,12 +168,31 @@ else:
                                 subject.run_command(run_args)
                         tail = [json.loads(line)[1] for line in
                                 (root / "calls").read_text().splitlines()[before:]]
-                        self.assertEqual(tail[-1], failure)
+                        self.assertEqual(tail[-1], "executable" if failure == "run" else failure)
                 with mock.patch.object(subject, "git_head", return_value="b" * 40):
                     with self.assertRaisesRegex(ValueError, "exact head"):
                         subject.export_command(export_args)
                     with self.assertRaisesRegex(ValueError, "exact head"):
                         subject.run_command(run_args)
+
+    def test_artifact_runner_verifies_commit_without_checkout(self):
+        plan = test_plan(unit=test_item("unit"))
+        with mock.patch.object(subject, "git_head") as git:
+            subject.verify_head(plan, C)
+            git.assert_not_called()
+        for bad in ("b" * 40, "incomplete", None):
+            if bad is None:
+                continue
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "exact head"):
+                subject.verify_head(plan, bad)
+
+    def test_rejects_executables_outside_manifest_output(self):
+        item = test_item("unit")
+        for exe in (item["out"] + "/bin/../escape",
+                    item["out"] + "/bin/nested/escape",
+                    item["out"] + "-another/bin/test-unit", "/tmp/untrusted"):
+            with self.subTest(exe=exe), self.assertRaises(ValueError):
+                subject.validate(test_plan(unit={**item, "exe": exe}))
 
     def test_generic_name_and_quoted_nix_attribute(self):
         self.assertEqual(subject.target("x86_64-linux", "basic-smoke"),
@@ -193,6 +225,8 @@ else:
             self.assertEqual(args[-1], ".#packages.x86_64-linux")
             self.assertIn("builtins.filter", args[-2])
             self.assertIn("builtins.attrNames", args[-2])
+            self.assertIn("meta.mainProgram", args[-2])
+            self.assertIn("/bin/", args[-2])
 
     def test_verify_full_exact_head_set_and_fail_closed(self):
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
@@ -202,7 +236,7 @@ else:
             a.parent.mkdir()
             b.parent.mkdir()
             def evidence(name):
-                return {"schemaVersion": 1, "digest": plan["digest"],
+                return {"schemaVersion": subject.SCHEMA, "digest": plan["digest"],
                         "commit": C, "name": name, **plan["tests"][name],
                         "status": "pass"}
             subject.save(a, evidence("alpha"))

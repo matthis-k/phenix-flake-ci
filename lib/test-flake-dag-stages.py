@@ -77,8 +77,8 @@ class StagedDagTests(unittest.TestCase):
 
     def test_join_compiles_final_checks_and_runtime_packages_in_one_graph(self):
         plan, _ = sample()
-        tests = {"schemaVersion": 1, "commit": SHA, "system": plan["system"],
-                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc")}}}
+        tests = {"schemaVersion": 2, "commit": SHA, "system": plan["system"],
+                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc"), "exe": store("r", "rpc") + "/bin/test-rpc"}}}
         tests["digest"] = stages.packages.digest(tests)
         outputs = [
             {"drvPath": plan["checks"]["integration"],
@@ -105,8 +105,8 @@ class StagedDagTests(unittest.TestCase):
 
     def test_stale_runtime_package_plan_fails_before_any_build(self):
         plan, _ = sample()
-        tests = {"schemaVersion": 1, "commit": "b" * 40, "system": plan["system"],
-                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc")}}}
+        tests = {"schemaVersion": 2, "commit": "b" * 40, "system": plan["system"],
+                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc"), "exe": store("r", "rpc") + "/bin/test-rpc"}}}
         tests["digest"] = stages.packages.digest(tests)
         with mock.patch.object(stages.subprocess, "check_output") as no_build:
             with self.assertRaisesRegex(ValueError, "exact-head"):
@@ -117,7 +117,7 @@ class StagedDagTests(unittest.TestCase):
     def test_stale_runtime_manifest_blocks_join_before_import(self):
         plan, graph = sample()
         manifest = stages.partition(plan, graph)
-        test_plan = {"schemaVersion": 1, "commit": "b" * 40,
+        test_plan = {"schemaVersion": 2, "commit": "b" * 40,
                      "system": plan["system"], "tests": {}}
         test_plan["digest"] = stages.packages.digest(test_plan)
         with tempfile.TemporaryDirectory() as directory:
@@ -140,7 +140,7 @@ class StagedDagTests(unittest.TestCase):
     def test_join_verifier_binds_runtime_manifest_digest(self):
         plan, graph = sample()
         manifest = stages.partition(plan, graph)
-        test_plan = {"schemaVersion": 1, "commit": SHA,
+        test_plan = {"schemaVersion": 2, "commit": SHA,
                      "system": plan["system"], "tests": {}}
         test_plan["digest"] = stages.packages.digest(test_plan)
         check_evidence = {

@@ -169,9 +169,10 @@ class DagTests(unittest.TestCase):
         plan = mkplan()
         graph = dag.graph_summary(plan, mkgraph())
         test_inventory = {
-            "schemaVersion": 1, "commit": SHA, "system": "x86_64-linux",
+            "schemaVersion": 2, "commit": SHA, "system": "x86_64-linux",
             "tests": {"rpc": {"drv": drv("r", "rpc"),
-                               "out": output("r", "rpc")}}}
+                               "out": output("r", "rpc"),
+                               "exe": output("r", "rpc") + "/bin/test-rpc"}}}
         test_inventory["digest"] = hashlib.sha256(json.dumps(
             test_inventory, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         with tempfile.TemporaryDirectory() as tmp:
