@@ -41,7 +41,9 @@ and post-build execution workflow.
 `execution = "runtime"` is its default, producing `suite.packages`.
 Entries with `execution = "build"` produce `suite.checks`. Consumers merge
 those attributes into their existing flake outputs. Both execution modes
-share the same assertion language. There is no second registration step.
+share the same assertion language. There is no second registration step. Both `mkSuite` and `mkTestCases` now
+reuse a pure defaults/specification normalizer. Shared process setup can
+therefore be authored once without adding runtime state or a test scheduler.
 
 `mkCargoTestPackages` is a compilation adapter for Cargo, not a distinct
 scheduling system: workspace test binaries compile as shared artifacts and
@@ -124,3 +126,28 @@ artifact scheduling, not a duplicate framework for test-specific scheduling.
 
 No claim of consumer cutover, improved wall-clock time or full backend coverage
 follows from passing the library's unit and integration tests alone.
+
+## Defaults normalization decision
+
+**Problem:** `mkTestCases` supported shared command, environment and fixture
+defaults, while `mkSuite` repeated those declarations for each runtime test.
+Copying merge behavior into `mkSuite` would create another evolving ruleset.
+
+**Baseline:** leave declarations verbose; no additional code, but repeated
+service/socket setup across integration cases and divergent merge semantics.
+
+**Selected:** one private, pure `normalize-test-specs.nix` shared by both
+public constructors. Only `mkTest` compiles specifications into artifacts;
+the existing native/staged workflows still schedule them. No external API
+migration or second registry is introduced.
+
+**Tradeoff:** an extra internal helper file; compensated by removing duplicated
+default-merging code and supplying common service/socket defaults without a
+special runtime adapter. Shallow service-attribute overrides are intentional:
+users override an entire named service definition, not arbitrary nested
+fields. Assertions are always per test, not inherited from another test.
+
+**Verification:** Nix API evaluation proves shared command/env/fixtures,
+ordered socket deduplication, service merging, and build/runtime projection.
+Consumer integration and equal CI behavior still require separate parity
+evidence.

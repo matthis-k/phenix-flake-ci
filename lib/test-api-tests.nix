@@ -82,6 +82,39 @@ let
       };
     };
   };
+  sharedCases = import ./normalize-test-specs.nix {
+    defaults = {
+      command.program = "/nix/store/demo/bin/cli";
+      env.LANG = "C";
+      fixtures."input.json" = "{}";
+      sockets = [ "rpc" ];
+      services.server = {
+        command.program = "/nix/store/demo/bin/server";
+        ready.unixSocket = "rpc";
+      };
+    };
+    tests = {
+      ping = { command.args = [ "ping" ]; };
+      extra = {
+        sockets = [ "rpc" "control" ];
+        services.control = {
+          command.program = "/nix/store/demo/bin/control";
+          ready.unixSocket = "control";
+        };
+      };
+    };
+  };
+  suiteDefaults = (import ./mk-test-suite.nix) {
+    inherit pkgs;
+    defaults = {
+      command.program = "/nix/store/demo/bin/cli";
+      env.LANG = "C";
+    };
+    tests = {
+      ping = { command.args = [ "ping" ]; };
+      fmt = { execution = "build"; command.args = [ "format" ]; };
+    };
+  };
   invalidBoth = builtins.tryEval (builtins.deepSeq (mkTest {
     inherit pkgs;
     name = "bad";
@@ -143,6 +176,18 @@ let
 
 in
 {
+  testDefaultsShareOneNormalization =
+    assert sharedCases.ping.command.program == "/nix/store/demo/bin/cli";
+    assert sharedCases.ping.command.args == [ "ping" ];
+    assert sharedCases.ping.env.LANG == "C";
+    assert sharedCases.ping.fixtures."input.json" == "{}";
+    assert sharedCases.ping.sockets == [ "rpc" ];
+    assert sharedCases.extra.sockets == [ "rpc" "control" ];
+    assert builtins.attrNames sharedCases.extra.services == [ "control" "server" ];
+    assert builtins.attrNames suiteDefaults.packages == [ "test.ping" ];
+    assert builtins.attrNames suiteDefaults.checks == [ "fmt" ];
+    true;
+
   mkSuiteProjectsOneInventory =
     assert builtins.attrNames suite.packages == [ "test.rpc" ];
     assert builtins.attrNames suite.checks == [ "format" ];

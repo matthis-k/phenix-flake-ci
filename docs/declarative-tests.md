@@ -205,7 +205,7 @@ The repo CI workflow runs the Python conformance tests and Nix evaluation. The e
 - `execution = "build"` (default for direct `mkTest`): creates an ordinary Nix check derivation and runs the assertions during its build. Suitable for deterministic/cacheable checks.
 - `execution = "runtime"`: produces an executable Nix package containing the test specification and runner. The **package build does not execute the test**. Use it under `packages.${system}."test.<id>"` so the distributed CI workflow compiles its closure at the build barrier and executes it in a tester job.
 
-Prefer `mkSuite` for a single project test inventory. It defaults each declared test to runtime execution, while `execution = "build"` projects into `checks`:
+Prefer `mkSuite` for a single project test inventory. It defaults each declared test to runtime execution, while `execution = "build"` projects into `checks`. Optional `defaults` are shared across entries: `command`, `env`, `fixtures`, and `services` use shallow attribute merging, while `sockets` uses ordered deduplication. Individual test expectations remain independent:
 
 ```nix
 let
