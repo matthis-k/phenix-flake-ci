@@ -51,8 +51,9 @@ ordinary `test.*` package wrappers select them for runtime execution.
 
 Implemented: shell-free commands, ordered steps, declared text fixtures,
 step references, local managed processes, allocated Unix sockets, socket
-creation readiness, process-group termination, bounded service-log tails,
-failure evidence, fresh temporary working directories.
+creation readiness, process-group termination, bounded test-step stdout and
+stderr capture (1 MiB per stream by default), bounded service-log *evidence*
+tails, failure evidence and fresh temporary working directories.
 
 All command and fixture references are validated before launching a managed
 service. After failed startup, earlier services are rolled back. After a
@@ -68,7 +69,10 @@ service-graph dependency resolution or network namespace isolation.
 ## Build and run boundary
 
 1. Evaluate the exact commit's `checks` and `packages.test.*` inventories.
-2. Present all ready compilation roots to **one Nix derivation scheduler**.
+2. On the trusted backend, present check and test-package compilation roots to
+   **one native Nix scheduler**. On the staged backend, tests are currently
+   prepared after the check DAG joins, using its restored store; this shares
+   existing outputs but does not yet offer the same cross-root scheduling.
 3. Verify realized output paths against the frozen plan, and transfer their
    runtime closures to independent tester jobs.
 4. Execute test packages offline with `--no-substitute --max-jobs 0`; a test
@@ -87,7 +91,9 @@ artifact scheduling, not a duplicate framework for test-specific scheduling.
   tests execute fresh and may require host resources.
 - **Shared compiler graph versus test parallelism:** deduplicate preparation
   first, fan out execution afterwards. One job per package is currently
-  simple but incurs GitHub runner startup overhead for tiny tests.
+  simple but incurs GitHub runner startup overhead for tiny tests. Above
+  256 runtime packages, planning fails explicitly until verified batching
+  is available rather than silently dropping tests.
 - **Safety versus environment flexibility:** Unix sockets and process groups
   are a deliberately narrow first backend. They provide lifecycle guarantees
   without implying container or VM isolation.
@@ -105,9 +111,10 @@ artifact scheduling, not a duplicate framework for test-specific scheduling.
    only when a real test needs TCP, isolated network, VM or remote host.
    Selection must reuse the existing plan and evidence gate rather than
    creating another scheduler. Missing capability must fail clearly.
-3. **Runtime correctness:** add measured output-size limits and service-health
-   policies only with documented behavior for legitimate long-running or
-   one-shot services.
+3. **Runtime correctness:** step output is now bounded and oversize output
+   fails explicitly; cap service *log files* (not merely evidence tails), and
+   introduce configurable service-health policies only with documented
+   behavior for legitimate long-running or one-shot services.
 4. **Overhead optimization:** measure per-test startup and artifact transport
    before adding optional batching; keep independent failure reporting when
    tests share a runner.
