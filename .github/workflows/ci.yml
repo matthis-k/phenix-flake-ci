@@ -90,7 +90,7 @@ jobs:
             ci-offline-runtime/plan.json
             ci-offline-runtime/closure.nar
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 1
 
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
