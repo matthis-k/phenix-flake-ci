@@ -233,6 +233,85 @@ def validate_command(command, label):
     return [command["program"], *args], timeout
 
 
+
+def validate_predicate_shape(predicate, label):
+    """Validate assertion operations before starting any test process."""
+    if is_reference(predicate) or not isinstance(predicate, dict):
+        return
+    ops = {"eq", "ne", "contains", "matches", "gt", "gte", "lt", "lte", "exists", "empty"}
+    require(bool(predicate) and set(predicate) <= ops,
+            f"{label}: invalid predicate operations")
+    for op, value in predicate.items():
+        if is_reference(value):
+            continue
+        if op == "matches":
+            require(isinstance(value, str), f"{label}: regex must be a string")
+            try:
+                re.compile(value)
+            except re.error as error:
+                raise InvalidSpec(f"{label}: invalid regex: {error}") from error
+        elif op in {"gt", "gte", "lt", "lte"}:
+            require(isinstance(value, (int, float)) and not isinstance(value, bool),
+                    f"{label}: {op} expects a number")
+        elif op in {"exists", "empty"}:
+            require(type(value) is bool, f"{label}: {op} expects a boolean")
+
+
+def validate_file_expectations(files, label):
+    require(isinstance(files, dict), f"{label} must be an attribute set")
+    for filename, predicates in files.items():
+        require(isinstance(filename, str) and filename and
+                not Path(filename).is_absolute() and ".." not in Path(filename).parts,
+                f"{label}: invalid workspace file path {filename!r}")
+        target = f"{label}.{filename}"
+        require(isinstance(predicates, dict) and bool(predicates) and
+                set(predicates) <= {"exists", "text", "json", "size"},
+                f"{target}: invalid file assertions")
+        presence = predicates.get("exists", True)
+        require(type(presence) is bool and (presence or len(predicates) == 1),
+                f"{target}: invalid file presence expectation")
+        if "size" in predicates:
+            validate_predicate_shape(predicates["size"], f"{target}.size")
+        if "text" in predicates:
+            text = predicates["text"]
+            require(isinstance(text, dict) and bool(text) and
+                    set(text) <= {"eq", "ne", "contains", "matches", "empty"},
+                    f"{target}.text: invalid string assertions")
+            for op, value in text.items():
+                validate_predicate_shape({op: value}, f"{target}.text.{op}")
+        if "json" in predicates:
+            require(isinstance(predicates["json"], dict),
+                    f"{target}.json must be an attribute set")
+            for location, predicate in predicates["json"].items():
+                validate_pointer(location)
+                validate_predicate_shape(predicate, f"{target}.json.{location}")
+
+
+def validate_expectation_shape(expected, label, *, final=False):
+    require(isinstance(expected, dict), f"{label} must be an attribute set")
+    allowed = {"files"} if final else {"exitCode", "stdout", "stderr", "files"}
+    require(set(expected) <= allowed, f"{label} has unknown observations")
+    if "exitCode" in expected:
+        validate_predicate_shape(expected["exitCode"], f"{label}.exitCode")
+    for channel in ("stdout", "stderr"):
+        if channel not in expected:
+            continue
+        predicates = expected[channel]
+        require(isinstance(predicates, dict) and
+                set(predicates) <= {"empty", "contains", "matches", "eq", "ne", "json"},
+                f"{label}.{channel}: invalid stream assertions")
+        for op, value in predicates.items():
+            if op == "json":
+                require(isinstance(value, dict), f"{label}.{channel}.json must be an attribute set")
+                for location, predicate in value.items():
+                    validate_pointer(location)
+                    validate_predicate_shape(predicate, f"{label}.{channel}.json.{location}")
+            else:
+                validate_predicate_shape({op: value}, f"{label}.{channel}.{op}")
+    if "files" in expected:
+        validate_file_expectations(expected["files"], f"{label}.files")
+
+
 def test(spec):
     require(isinstance(spec, dict), "test must be an attribute set")
     steps = spec.get("steps")
@@ -262,8 +341,10 @@ def test(spec):
         argv, _ = validate_command(step.get("command"), sid)
         validate_references(argv, seen, f"{sid}.command", set(sockets))
         validate_references(step.get("expect", {}), seen, f"{sid}.expect")
+        validate_expectation_shape(step.get("expect", {}), f"{sid}.expect")
         seen.add(sid)
     validate_references(final_expect, seen, "expect")
+    validate_expectation_shape(final_expect, "expect", final=True)
     failures, results, observations = [], [], {}
     with tempfile.TemporaryDirectory(prefix="phenix-test-") as temp:
         root = Path(temp).resolve()
