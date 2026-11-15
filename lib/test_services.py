@@ -110,24 +110,35 @@ class ServiceGroup:
         }
 
     def close(self):
+        # Children can outlive their service leader. A successful poll() on the
+        # leader must not exempt its process group from cleanup.
         for _, process in reversed(self.processes):
-            if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + 1
+        try:
+            for _, process in reversed(self.processes):
                 try:
-                    os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=max(0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    pass
+            # Also kill descendants of leaders which have already exited (or
+            # whose descendants ignore SIGTERM), without waiting indefinitely.
+            for _, process in reversed(self.processes):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-        for _, process in reversed(self.processes):
-            if process.poll() is None:
+            for _, process in reversed(self.processes):
                 try:
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait()
-        for handle in self.handles:
-            handle.close()
+                    pass
+        finally:
+            for handle in self.handles:
+                handle.close()
 
     def __exit__(self, _type, _value, _traceback):
         self.close()
