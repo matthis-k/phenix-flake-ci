@@ -312,5 +312,55 @@ class RunnerTests(unittest.TestCase):
                 os.kill(pid, 0)
 
 
+    def test_managed_service_kills_descendants_after_leader_exits(self):
+        import os
+        import signal
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "descendant.pid"
+            reference = {"ref": {"fixture": "rpc", "field": "path"}}
+            # The service leader exits after socket readiness. Its child
+            # remains in the same process group and ignores graceful shutdown.
+            server = (
+                "import pathlib,socket,subprocess,sys,time;"
+                "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                "child=subprocess.Popen([sys.executable,'-c',"
+                "'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)']);"
+                "pathlib.Path(sys.argv[2]).write_text(str(child.pid));"
+                "time.sleep(0.12)"
+            )
+            try:
+                result = runner.test({
+                    "sockets": ["rpc"],
+                    "services": {"server": {
+                        "command": self.command(server, reference, str(pidfile)),
+                        "ready": {"unixSocket": "rpc", "timeoutSeconds": 2}}},
+                    "command": self.command("import time;time.sleep(0.25)"),
+                })
+                self.assertEqual(result["status"], "pass", result)
+                pid = int(pidfile.read_text())
+
+                def running():
+                    # A killed orphan can briefly remain as a zombie before
+                    # PID 1 reaps it; zombies are no longer executing.
+                    try:
+                        return Path(f"/proc/{pid}/stat").read_text().split()[2] not in ("Z", "X")
+                    except FileNotFoundError:
+                        return False
+
+                for _ in range(40):
+                    if not running():
+                        break
+                    time.sleep(0.025)
+                self.assertFalse(running(), "managed service leaked a live descendant")
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+
 if __name__ == "__main__":
     unittest.main()
