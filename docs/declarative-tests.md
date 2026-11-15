@@ -278,8 +278,11 @@ Step stdout and stderr are captured incrementally with a **1 MiB default cap
 per stream**. Exceeding either cap fails the test regardless of expected exit
 status; the command's complete process group is terminated. A specific command
 may set `maxOutputBytes = 4194304;` (4 MiB), with a supported maximum of
-64 MiB. This limit applies to captured test-step output, not to service log
-files; service evidence retains bounded tails.
+64 MiB. This limit applies to captured test-step output. Managed service stdout
+and stderr are continuously drained; each on-disk log is capped at 1 MiB,
+while the last 4 KiB remain available in evidence regardless of earlier
+truncation. Evidence records total bytes and truncation separately. Excessive
+service logging does not by itself fail an otherwise successful test.
 
 One runtime `test.*` package currently becomes one GitHub Actions matrix job.
 Inventories exceeding GitHub's 256-job limit now fail at planning with a

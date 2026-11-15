@@ -9,6 +9,7 @@ import re
 import selectors
 import signal
 import subprocess
+import threading
 import time
 
 
@@ -125,6 +126,57 @@ def run_isolated(argv, *, cwd, env, timeout, max_output_bytes=DEFAULT_OUTPUT_LIM
         process.stderr.close()
 
 
+SERVICE_LOG_FILE_LIMIT = 1024 * 1024
+SERVICE_LOG_TAIL_LIMIT = 4096
+
+
+class _BoundedServiceLog:
+    """Drain a service pipe without ever growing its on-disk log unboundedly."""
+
+    def __init__(self, stream, file):
+        self.stream = stream
+        self.file = file
+        self.total = 0
+        self.stored = 0
+        self.tail = bytearray()
+        self.error = None
+        self.thread = threading.Thread(target=self._drain, daemon=True)
+        self.thread.start()
+
+    def _drain(self):
+        try:
+            while True:
+                chunk = self.stream.read1(65536)
+                if not chunk:
+                    break
+                self.total += len(chunk)
+                remaining = SERVICE_LOG_FILE_LIMIT - self.stored
+                if remaining > 0:
+                    prefix = chunk[:remaining]
+                    self.file.write(prefix)
+                    self.stored += len(prefix)
+                self.tail = (self.tail + chunk)[-SERVICE_LOG_TAIL_LIMIT:]
+        except OSError as error:
+            self.error = str(error)
+        finally:
+            self.file.close()
+            self.stream.close()
+
+    def finish(self):
+        self.thread.join(timeout=3)
+        if self.thread.is_alive():
+            raise ServiceError("managed service retained an output pipe after teardown")
+        if self.error:
+            raise ServiceError(f"managed service log collection failed: {self.error}")
+
+    def evidence(self):
+        return {
+            "tail": self.tail.decode("utf-8", errors="replace"),
+            "bytes": self.total,
+            "truncated": self.total > self.stored,
+        }
+
+
 class ServiceGroup:
     """Owns process groups and log files; teardown also handles partial startup."""
 
@@ -135,8 +187,8 @@ class ServiceGroup:
         self.resolve = resolve
         self.sockets = {name: str(root / "sockets" / (name + ".sock")) for name in socket_names}
         self.processes = []
-        self.handles = []
         self.log_paths = {}
+        self.captures = {}
 
     def __enter__(self):
         (self.root / "sockets").mkdir(parents=True, exist_ok=True)
@@ -148,14 +200,27 @@ class ServiceGroup:
                     raise ServiceError(f"service {name}: command reference must resolve to a string")
                 log_out = self.root / "logs" / (name + ".stdout.log")
                 log_err = self.root / "logs" / (name + ".stderr.log")
-                stdout = log_out.open("wb")
-                stderr = log_err.open("wb")
-                self.handles.extend([stdout, stderr])
-                self.log_paths[name] = (log_out, log_err)
-                process = subprocess.Popen(
-                    argv, cwd=self.root, env={**self.environment, **service.get("env", {})},
-                    stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True)
+                stdout_file = log_out.open("wb")
+                try:
+                    stderr_file = log_err.open("wb")
+                except BaseException:
+                    stdout_file.close()
+                    raise
+                try:
+                    process = subprocess.Popen(
+                        argv, cwd=self.root, env={**self.environment, **service.get("env", {})},
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, start_new_session=True)
+                except BaseException:
+                    stdout_file.close()
+                    stderr_file.close()
+                    raise
                 self.processes.append((name, process))
+                self.log_paths[name] = (log_out, log_err)
+                self.captures[name] = (
+                    _BoundedServiceLog(process.stdout, stdout_file),
+                    _BoundedServiceLog(process.stderr, stderr_file),
+                )
                 self._await_ready(name, process, service["ready"])
         except (OSError, ValueError, ServiceError) as exc:
             self.close()
@@ -174,16 +239,16 @@ class ServiceGroup:
         raise ServiceError(f"service {name} readiness timed out waiting for socket {ready['unixSocket']}")
 
     def evidence(self):
-        def tail(path):
-            if not path.exists():
-                return ""
-            with path.open("rb") as stream:
-                stream.seek(0, os.SEEK_END)
-                stream.seek(max(0, stream.tell() - 4096))
-                return stream.read().decode("utf-8", errors="replace")
         return {
-            name: {"stdoutTail": tail(out), "stderrTail": tail(err)}
-            for name, (out, err) in self.log_paths.items()
+            name: {
+                "stdoutTail": out.evidence()["tail"],
+                "stderrTail": err.evidence()["tail"],
+                "stdoutBytes": out.total,
+                "stderrBytes": err.total,
+                "stdoutTruncated": out.total > out.stored,
+                "stderrTruncated": err.total > err.stored,
+            }
+            for name, (out, err) in self.captures.items()
         }
 
     def close(self):
@@ -214,8 +279,15 @@ class ServiceGroup:
                 except subprocess.TimeoutExpired:
                     pass
         finally:
-            for handle in self.handles:
-                handle.close()
+            errors = []
+            for channels in self.captures.values():
+                for capture in channels:
+                    try:
+                        capture.finish()
+                    except ServiceError as error:
+                        errors.append(str(error))
+            if errors:
+                raise ServiceError("; ".join(errors))
 
     def __exit__(self, _type, _value, _traceback):
         self.close()

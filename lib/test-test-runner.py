@@ -348,6 +348,39 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(evidence["steps"], ["ping"])
         self.assertIn("server", evidence["services"])
 
+    def test_noisy_service_logs_are_bounded_and_retain_recent_tail(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            from test_services import SERVICE_LOG_FILE_LIMIT, ServiceGroup
+
+            root = Path(directory)
+            reference = {"ref": {"fixture": "rpc", "field": "path"}}
+            # A pipe filled before socket bind must not block readiness.
+            # The tail must retain the last bytes despite the disk cap.
+            server = (
+                "import socket,sys,time;"
+                "sys.stdout.write('a' * (1024 * 1024 + 8192) + 'END-MARKER');"
+                "sys.stdout.flush();"
+                "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                "time.sleep(30)"
+            )
+            group = ServiceGroup(root, ["rpc"], {
+                "server": {
+                    "command": self.command(server, reference),
+                    "ready": {"unixSocket": "rpc", "timeoutSeconds": 5},
+                },
+            }, {}, lambda program, args: runner.materialize_refs(
+                [program, *args], {}, group.sockets))
+            with group:
+                pass
+            evidence = group.evidence()["server"]
+            self.assertGreater(evidence["stdoutBytes"], SERVICE_LOG_FILE_LIMIT)
+            self.assertTrue(evidence["stdoutTruncated"])
+            self.assertTrue(evidence["stdoutTail"].endswith("END-MARKER"))
+            self.assertLessEqual((root / "logs/server.stdout.log").stat().st_size,
+                                 SERVICE_LOG_FILE_LIMIT)
+            self.assertEqual((root / "logs/server.stderr.log").stat().st_size, 0)
+
     def test_managed_service_readiness_timeout_is_failure(self):
         reference = {"ref": {"fixture": "rpc", "field": "path"}}
         evidence = runner.test({

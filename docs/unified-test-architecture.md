@@ -54,8 +54,9 @@ ordinary `test.*` package wrappers select them for runtime execution.
 Implemented: shell-free commands, ordered steps, declared text fixtures,
 step references, local managed processes, allocated Unix sockets, socket
 creation readiness, process-group termination, bounded test-step stdout and
-stderr capture (1 MiB per stream by default), bounded service-log *evidence*
-tails, failure evidence and fresh temporary working directories.
+stderr capture (1 MiB per stream by default), bounded service-log files
+(1 MiB per stream) with independent recent 4 KiB tails, failure evidence
+and fresh temporary working directories.
 
 All command and fixture references are validated before launching a managed
 service. After failed startup, earlier services are rolled back. After a
@@ -114,9 +115,9 @@ artifact scheduling, not a duplicate framework for test-specific scheduling.
    Selection must reuse the existing plan and evidence gate rather than
    creating another scheduler. Missing capability must fail clearly.
 3. **Runtime correctness:** step output is now bounded and oversize output
-   fails explicitly; cap service *log files* (not merely evidence tails), and
-   introduce configurable service-health policies only with documented
-   behavior for legitimate long-running or one-shot services.
+   fails explicitly; service files are capped and recent tails preserved
+   independently. Introduce configurable service-health policies only with
+   documented behavior for legitimate long-running or one-shot services.
 4. **Overhead optimization:** measure per-test startup and artifact transport
    before adding optional batching; keep independent failure reporting when
    tests share a runner.
