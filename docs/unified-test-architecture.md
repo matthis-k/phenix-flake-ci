@@ -72,10 +72,13 @@ service-graph dependency resolution or network namespace isolation.
 ## Build and run boundary
 
 1. Evaluate the exact commit's `checks` and `packages.test.*` inventories.
-2. On the trusted backend, present check and test-package compilation roots to
-   **one native Nix scheduler**. On the staged backend, tests are currently
-   prepared after the check DAG joins, using its restored store; this shares
-   existing outputs but does not yet offer the same cross-root scheduling.
+2. Present check and runtime-package roots together to **one Nix invocation**
+   at each build boundary: the trusted coordinator builds all roots in one
+   graph; the staged untrusted join combines dependent checks and runtime
+   packages after importing ready-leaf outputs. Both paths share the same
+   realization, output matching and offline pinning helpers. Staged workers
+   still use separate stores, so earlier-stage cross-worker deduplication
+   remains less complete than the single-store trusted scheduler.
 3. Verify realized output paths against the frozen plan, and transfer their
    runtime closures to independent tester jobs.
 4. Execute test packages offline with `--no-substitute --max-jobs 0`; a test

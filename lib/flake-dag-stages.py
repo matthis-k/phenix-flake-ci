@@ -23,6 +23,7 @@ def module(name, filename):
 
 planner = module("flake_check_plan_stages", "flake-check-plan.py")
 dag = module("flake_check_dag_stages", "flake-check-dag.py")
+packages = module("flake_test_packages_stages", "flake-test-packages.py")
 SCHEMA = 1
 
 def load(path):
@@ -93,19 +94,29 @@ def ensure_commit(plan):
     if planner.run_command(["git", "rev-parse", "HEAD"]) != plan["commit"]:
         raise ValueError("worker checkout does not match exact-head DAG")
 
-def build_selected(plan, names):
-    if not names:
-        return {}
+def build_selected(plan, names, *, test_plan=None, test_root=None):
     if len(names) != len(set(names)) or not set(names) <= set(plan["checks"]):
         raise ValueError("duplicate or undeclared selected check")
     subset = {name: plan["checks"][name] for name in sorted(names)}
     targets = [f".#checks.{plan['system']}.{name}" for name in sorted(names)]
-    # One Nix invocation for every ready root in this worker: Nix schedules
-    # the entire dependency DAG concurrently and builds identical .drv paths
-    # only once, rather than serializing one nix build per named check.
-    raw = subprocess.check_output(
-        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True)
-    realized = dag.parse_nix_results(json.loads(raw), subset)
+    derivations = set(subset.values())
+    if test_plan is not None:
+        packages.validate(test_plan)
+        if (test_plan["commit"] != plan["commit"]
+                or test_plan["system"] != plan["system"]):
+            raise ValueError("test package plan must match exact-head Nix check plan")
+        if test_plan["tests"] and not test_root:
+            raise ValueError("test-root required for executable test packages")
+        for name, item in sorted(test_plan["tests"].items()):
+            derivations.add(item["drv"])
+            targets.append(packages.target(plan["system"], name))
+    if not targets:
+        return {}
+    # The leaf workers and final join reuse exactly the same realization proof.
+    # The final join compiles dependent checks and runtime packages together.
+    realized = dag.realize_roots(derivations, targets)
+    if test_plan is not None:
+        dag.pin_prebuilt_tests(test_plan, realized, test_root, packages)
     return {
         name: {"drv": drv, "status": "pass", "outputs": realized[drv]}
         for name, drv in subset.items()
@@ -211,13 +222,18 @@ def join_command(args):
         existing = planner.run_command(["nix", "path-info", "--offline", *paths]).splitlines()
         if set(existing) != set(paths):
             raise ValueError("missing realized fan-out outputs after import")
-    terminal = build_selected(plan, stages["finalChecks"])
+    test_plan = packages.validate(packages.load(args.test_packages)) if getattr(
+        args, "test_packages", None) else None
+    terminal = build_selected(plan, stages["finalChecks"], test_plan=test_plan,
+                              test_root=getattr(args, "test_root", None))
     if set(results) & set(terminal):
         raise ValueError("duplicate named check built twice")
     results.update(terminal)
     if set(results) != set(plan["checks"]):
         raise ValueError("incomplete joined check inventory")
     out = evidence(plan, stages, "join", results)
+    if test_plan is not None:
+        out["testPlanDigest"] = test_plan["digest"]
     save(args.output, out)
     print(f"PASS: {len(results)} exact-head checks joined; "
           f"{len(stages['finalChecks'])} dependent checks built in final job")
@@ -231,6 +247,12 @@ def verify_command(args):
         "graphDigest": stages["graphDigest"], "role": "join",
     }.items()):
         raise ValueError("stale final DAG evidence")
+    if getattr(args, "test_packages", None):
+        test_plan = packages.validate(packages.load(args.test_packages))
+        if (test_plan["commit"] != plan["commit"]
+                or test_plan["system"] != plan["system"]
+                or item.get("testPlanDigest") != test_plan["digest"]):
+            raise ValueError("stale or incomplete runnable test plan evidence")
     values = item.get("checks")
     if not isinstance(values, dict) or set(values) != set(plan["checks"]):
         raise ValueError("final DAG evidence omitted checks")
@@ -260,9 +282,12 @@ def main():
             sub.add_argument("--output", required=True)
         elif key == "join":
             sub.add_argument("--leaves", required=True)
+            sub.add_argument("--test-packages")
+            sub.add_argument("--test-root")
             sub.add_argument("--output", required=True)
         else:
             sub.add_argument("--evidence", required=True)
+            sub.add_argument("--test-packages")
     args = parser.parse_args()
     try:
         args.func(args)

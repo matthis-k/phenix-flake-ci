@@ -75,6 +75,45 @@ class StagedDagTests(unittest.TestCase):
              ".#checks.x86_64-linux.model", ".#checks.x86_64-linux.tools"],
             text=True)
 
+    def test_join_compiles_final_checks_and_runtime_packages_in_one_graph(self):
+        plan, _ = sample()
+        tests = {"schemaVersion": 1, "commit": SHA, "system": plan["system"],
+                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc")}}}
+        tests["digest"] = stages.packages.digest(tests)
+        outputs = [
+            {"drvPath": plan["checks"]["integration"],
+             "outputs": {"out": store("x", "integration")}},
+            {"drvPath": drv("r", "rpc"),
+             "outputs": {"out": store("r", "rpc")}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "roots"
+            with mock.patch.object(stages.subprocess, "check_output",
+                                   return_value=json.dumps(outputs)) as built, mock.patch.object(
+                    stages.subprocess, "run") as pinned:
+                result = stages.build_selected(
+                    plan, ["integration"], test_plan=tests, test_root=str(root))
+            self.assertEqual(set(result), {"integration"})
+            built.assert_called_once_with(
+                ["nix", "build", "--no-link", "--json", "-L",
+                 ".#checks.x86_64-linux.integration",
+                 '.#packages.x86_64-linux."test.rpc"'],
+                text=True)
+            pinned.assert_called_once()
+            self.assertIn("--no-substitute", pinned.call_args.args[0])
+            self.assertIn(str(root), pinned.call_args.args[0])
+
+    def test_stale_runtime_package_plan_fails_before_any_build(self):
+        plan, _ = sample()
+        tests = {"schemaVersion": 1, "commit": "b" * 40, "system": plan["system"],
+                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc")}}}
+        tests["digest"] = stages.packages.digest(tests)
+        with mock.patch.object(stages.subprocess, "check_output") as no_build:
+            with self.assertRaisesRegex(ValueError, "exact-head"):
+                stages.build_selected(
+                    plan, ["integration"], test_plan=tests, test_root="/tmp/roots")
+            no_build.assert_not_called()
+
     def test_export_closure_subtracts_shared_paths(self):
         checks = {"model": {"outputs": [store("a", "model")]}}
         shared = [store("b", "dependency")]

@@ -242,23 +242,20 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
             --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
-      - name: Import completed check outputs and build dependent roots
+      - name: Import outputs and compile final checks plus runtime packages
         run: |
           python3 .ci-tools/flake-ci/lib/flake-dag-stages.py join \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --stages ci-plan/stages.json --leaves dag-leaves \
+            --test-packages ci-plan/test-packages.json \
+            --test-root "${RUNNER_TEMP}/phenix-dag-runnable-roots" \
             --output dag-final/evidence.json
-      - name: Exact-head DAG evidence gate
+      - name: Exact-head DAG and runtime-package evidence gate
         run: |
           python3 .ci-tools/flake-ci/lib/flake-dag-stages.py verify \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
-            --stages ci-plan/stages.json --evidence dag-final/evidence.json
-      - name: Prepare runnable tests using the build-stage Nix store
-        if: needs.plan.outputs.test_count != '0'
-        run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py build \
-            --plan ci-plan/test-packages.json \
-            --root "${RUNNER_TEMP}/phenix-dag-runnable-roots"
+            --stages ci-plan/stages.json --evidence dag-final/evidence.json \
+            --test-packages ci-plan/test-packages.json
       - name: Export verified prebuilt test runtime closure
         if: needs.plan.outputs.test_count != '0'
         run: |

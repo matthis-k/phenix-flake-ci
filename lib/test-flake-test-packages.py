@@ -47,9 +47,12 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn("flake-test-packages.py plan", plan)
         self.assertIn("test_matrix:", plan)
         self.assertIn("test_count:", plan)
+        self.assertIn("--test-packages ci-plan/test-packages.json", join)
+        self.assertIn("--test-root", join)
+        self.assertNotIn("flake-test-packages.py build", join)
+        self.assertLess(join.index("flake-dag-stages.py join"),
+                        join.index("flake-dag-stages.py verify"))
         self.assertLess(join.index("flake-dag-stages.py verify"),
-                        join.index("flake-test-packages.py build"))
-        self.assertLess(join.index("flake-test-packages.py build"),
                         join.index("flake-test-packages.py export"))
         self.assertIn("needs: [plan, join]", test)
         self.assertIn("--closure dag-test-closure/closure.nar", test)
