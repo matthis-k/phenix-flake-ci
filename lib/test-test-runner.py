@@ -14,6 +14,22 @@ class RunnerTests(unittest.TestCase):
     def command(self, source, *args):
         return {"program": sys.executable, "args": ["-c", source, *args]}
 
+    def assert_descendant_stopped(self, pid):
+        import time
+
+        def running():
+            # A killed orphan can remain a zombie until PID 1 reaps it.
+            try:
+                return Path(f"/proc/{pid}/stat").read_text().split()[2] not in ("Z", "X")
+            except FileNotFoundError:
+                return False
+
+        for _ in range(40):
+            if not running():
+                break
+            time.sleep(0.025)
+        self.assertFalse(running(), "test runner leaked a live descendant")
+
     def test_multiple_assertions_single_execution(self):
         spec = {"command": self.command("from pathlib import Path; import json; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); print(json.dumps({'status':'ready','count':2,'items':['a','b']}))"),
                 "expect": {"exitCode": 0, "stdout": {"json": {"/status": "ready", "/count": {"gte": 2}, "/items/1": "b"}},
@@ -61,6 +77,34 @@ class RunnerTests(unittest.TestCase):
                                 "expect": {"exitCode": {"ne": 0}}})
         self.assertEqual(evidence["status"], "fail")
         self.assertIn("timed out", evidence["failures"][0]["reason"])
+
+    def test_timeout_kills_spawned_descendants(self):
+        import os
+        import signal
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "child.pid"
+            script = (
+                "import pathlib,subprocess,sys,time;"
+                "child=subprocess.Popen([sys.executable,'-c',"
+                "'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)']);"
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid));"
+                "time.sleep(30)"
+            )
+            try:
+                evidence = runner.test({
+                    "command": {**self.command(script, str(pidfile)), "timeoutSeconds": 0.75},
+                })
+                self.assertEqual(evidence["status"], "fail")
+                self.assertIn("timed out", evidence["failures"][0]["reason"])
+                self.assertTrue(pidfile.exists(), "descendant was not started before timeout")
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_command_args_are_not_shell_expanded(self):
         evidence = runner.test({"command": self.command("import sys; print(sys.argv[1])", "literal; $(echo danger)"),
@@ -339,21 +383,7 @@ class RunnerTests(unittest.TestCase):
                     "command": self.command("import time;time.sleep(0.25)"),
                 })
                 self.assertEqual(result["status"], "pass", result)
-                pid = int(pidfile.read_text())
-
-                def running():
-                    # A killed orphan can briefly remain as a zombie before
-                    # PID 1 reaps it; zombies are no longer executing.
-                    try:
-                        return Path(f"/proc/{pid}/stat").read_text().split()[2] not in ("Z", "X")
-                    except FileNotFoundError:
-                        return False
-
-                for _ in range(40):
-                    if not running():
-                        break
-                    time.sleep(0.025)
-                self.assertFalse(running(), "managed service leaked a live descendant")
+                self.assert_descendant_stopped(int(pidfile.read_text()))
             finally:
                 if pidfile.exists():
                     try:
