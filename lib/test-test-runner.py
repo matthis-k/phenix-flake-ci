@@ -411,6 +411,47 @@ class RunnerTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+    def test_malformed_assertions_cannot_launch_managed_services(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-start"
+            server = self.command(
+                f"from pathlib import Path;Path({str(marker)!r}).touch()")
+            invalid = [
+                {"stdout": {"typo": "x"}},
+                {"stderr": {"matches": "["}},
+                {"exitCode": {"invalidOperation": 0}},
+                {"files": {"../escape": {"exists": True}}},
+                {"files": {"artifact": {"text": {"matches": "["}}}},
+                {"files": {"artifact": {"exists": "true"}}},
+                {"files": {"artifact": {"size": {"unexpected": 2}}}},
+                {"stdout": {"json": {"bad-pointer": 3}}},
+            ]
+            for expectation in invalid:
+                with self.subTest(expectation=expectation):
+                    with self.assertRaises(runner.InvalidSpec):
+                        runner.test({
+                            "sockets": ["rpc"],
+                            "services": {"server": {
+                                "command": server,
+                                "ready": {"unixSocket": "rpc", "timeoutSeconds": 0.1}}},
+                            "command": self.command("print('must-not-run')"),
+                            "expect": expectation,
+                        })
+                    self.assertFalse(marker.exists())
+
+    def test_final_expectation_shape_is_validated_before_processes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-step"
+            with self.assertRaises(runner.InvalidSpec):
+                runner.test({
+                    "steps": [{"id": "first", "command": self.command(
+                        f"from pathlib import Path;Path({str(marker)!r}).touch()")}],
+                    "expect": {"stdout": {"contains": "not-allowed-at-suite-level"}},
+                })
+            self.assertFalse(marker.exists())
+
     def test_unknown_fixture_ref_rejected_before_side_effects(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
