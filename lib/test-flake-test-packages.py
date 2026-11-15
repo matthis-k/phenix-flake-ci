@@ -225,7 +225,7 @@ else:
             self.assertEqual(args[-1], ".#packages.x86_64-linux")
             self.assertIn("builtins.filter", args[-2])
             self.assertIn("builtins.attrNames", args[-2])
-            self.assertIn("meta.mainProgram", args[-2])
+            self.assertIn(".mainProgram", args[-2])
             self.assertIn("/bin/", args[-2])
 
     def test_verify_full_exact_head_set_and_fail_closed(self):
