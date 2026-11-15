@@ -48,6 +48,36 @@ def validate(socket_names, services, validate_command, validate_references):
             raise ValueError(f"service {name}: env must contain strings")
 
 
+def run_isolated(argv, *, cwd, env, timeout):
+    """Run an assertion command with the same process-group safety as services.
+
+    Every command gets its own group. Descendants cannot keep stdout pipes
+    open forever or survive a timeout/successful command as orphaned workers.
+    """
+    process = subprocess.Popen(
+        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        errors="replace", start_new_session=True)
+    try:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired as error:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from error
+    finally:
+        # The leader may have exited while grandchildren remain in the group.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
 class ServiceGroup:
     """Owns process groups and log files; teardown also handles partial startup."""
 
