@@ -229,7 +229,10 @@ in {
 }
 ```
 
-The existing `test.*` package discovery, build barrier, closure transfer and offline Nix execution handle runtime packages. The current workflow may choose to execute one package per job; test batching and capability routing are future extensions, not implicit in `mkSuite`.
+The existing `test.*` package discovery, build barrier and closure transfer
+handle runtime packages. Test executable paths are resolved into the frozen
+manifest; test jobs run those executables directly from the imported store,
+without evaluating the consumer flake again. The current workflow may choose to execute one package per job; test batching and capability routing are future extensions, not implicit in `mkSuite`.
 
 ### Managed local processes and Unix sockets
 
@@ -270,7 +273,10 @@ nix build --no-link '.#packages.x86_64-linux."test.handshake"'
 nix run --offline --no-substitute --max-jobs 0 '.#packages.x86_64-linux."test.handshake"'
 ```
 
-The second command intentionally fails if required outputs are missing rather than silently building them. Set `PHENIX_TEST_OUTPUT` to a writable directory to retain a passing result document. Failures emit machine-readable JSON to stdout and detailed diagnostics to stderr; CI's existing evidence gate still owns run-level acceptance.
+The second command is an optional local smoke check. CI uses direct
+execution from the resolved store path instead, so an offline tester needs
+no consumer flake, lock file or source checkout. A missing executable is a
+failure rather than a trigger to build it. Set `PHENIX_TEST_OUTPUT` to a writable directory to retain a passing result document. Failures emit machine-readable JSON to stdout and detailed diagnostics to stderr; CI's existing evidence gate still owns run-level acceptance.
 
 ### Bounded command output and matrix capacity
 

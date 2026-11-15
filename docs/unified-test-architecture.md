@@ -83,8 +83,11 @@ service-graph dependency resolution or network namespace isolation.
 3. Verify realized output paths against the frozen plan, bind the staged join
    evidence to the runtime-plan digest, and transfer their
    runtime closures to independent tester jobs.
-4. Execute test packages offline with `--no-substitute --max-jobs 0`; a test
-   runner cannot quietly compile absent artifacts.
+4. Resolve each `test.*` executable once at planning time using Nix's
+   `meta.mainProgram`, then `pname`, then derivation name. Freeze its store
+   path (`exe`) alongside the derivation and output in a schema-2 manifest.
+   On testers, import the closure, verify its output offline, and execute the
+   exact frozen executable directly. No flake evaluation or Nix build occurs.
 5. Verify test-name, derivation, output path, commit, plan digest and outcome
    at the acceptance gate. Missing/canceled/failed evidence fails closed.
 
@@ -172,3 +175,18 @@ confinement. Higher-trust secrets must stay out of test jobs.
 Service startup also rolls back partially started processes when interrupted,
 including cancellation signals handled as Python exceptions, rather than only
 on ordinary startup failures.
+
+## Fresh runner closure proof
+
+Library CI exports the exact-head manifest, complete runtime closure and
+runner script as one artifact. A **separate GitHub Actions runner with no
+source checkout** installs Nix without API access tokens, imports the closure,
+executes the frozen binaries from a temporary directory without `flake.nix`,
+and verifies both test outcomes against the original manifest. The GitHub run
+commit SHA supplies exact-head authority without requiring a local Git tree.
+
+The executable name follows Nix's documented derivation application order:
+`meta.mainProgram`, `pname`, then the parsed derivation name. Invalid paths,
+missing binaries and non-executable package outputs fail instead of attempting
+a rebuild. The inventory schema is intentionally replaced with version 2,
+without a compatibility shim for the older manifest format.
