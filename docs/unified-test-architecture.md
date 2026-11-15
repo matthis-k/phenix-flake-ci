@@ -157,3 +157,18 @@ fields. Assertions are always per test, not inherited from another test.
 ordered socket deduplication, service merging, and build/runtime projection.
 Consumer integration and equal CI behavior still require separate parity
 evidence.
+
+## Runtime credential boundary
+
+Runtime test jobs must not inject `GITHUB_TOKEN` into Nix's
+`access-tokens` setting. The install action can add that token by default,
+so both backends explicitly configure an empty `access-tokens` value on
+test-only jobs, and neither passes the token as an installer input. Test jobs
+retain read-only `contents` permissions and checkout with
+`persist-credentials: false`. This reduces exposed authority but does not
+isolate arbitrary test executables from the host or guarantee network
+confinement. Higher-trust secrets must stay out of test jobs.
+
+Service startup also rolls back partially started processes when interrupted,
+including cancellation signals handled as Python exceptions, rather than only
+on ordinary startup failures.

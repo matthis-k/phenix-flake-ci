@@ -57,6 +57,10 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn("needs: [plan, join]", test)
         self.assertIn("--closure dag-test-closure/closure.nar", test)
         self.assertIn("flake-test-packages.py run", test)
+        self.assertIn("access-tokens =", test)
+        self.assertNotIn("github_access_token:", test)
+        self.assertNotIn("secrets.GITHUB_TOKEN", test)
+        self.assertIn("contents: read", test)
         self.assertNotIn("nix build", test)
         for forbidden in ("TS_OAUTH", "id-token: write", "secrets: inherit"):
             self.assertNotIn(forbidden, test)
@@ -75,6 +79,9 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn("--closure ci-test-closure/closure.nar", runner)
         self.assertIn("save: false", runner)
         self.assertIn("contents: read", runner)
+        self.assertIn("access-tokens =", runner)
+        self.assertNotIn("github_access_token:", runner)
+        self.assertNotIn("secrets.GITHUB_TOKEN", runner)
         for forbidden in ("TS_OAUTH", "id-token: write", "nix build", "secrets: inherit"):
             self.assertNotIn(forbidden, runner)
 

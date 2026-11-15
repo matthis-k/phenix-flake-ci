@@ -222,9 +222,13 @@ class ServiceGroup:
                     _BoundedServiceLog(process.stderr, stderr_file),
                 )
                 self._await_ready(name, process, service["ready"])
-        except (OSError, ValueError, ServiceError) as exc:
+        except BaseException as exc:
+            # KeyboardInterrupt and cancellation must not orphan services
+            # launched during an incomplete startup.
             self.close()
-            raise ServiceError(str(exc) + "; " + str(self.evidence())) from exc
+            if isinstance(exc, (OSError, ValueError, ServiceError)):
+                raise ServiceError(str(exc) + "; " + str(self.evidence())) from exc
+            raise
         return self.sockets
 
     def _await_ready(self, name, process, ready):

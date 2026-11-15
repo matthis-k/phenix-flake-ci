@@ -257,7 +257,10 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          # Never persist an API token into Nix configuration on runners
+          # executing potentially untrusted runtime packages.
+          extra_nix_config: |
+            access-tokens =
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}

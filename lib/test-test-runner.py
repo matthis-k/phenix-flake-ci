@@ -425,6 +425,23 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("exited before readiness", evidence["failures"][0]["reason"])
         self.assertIn("crash", evidence["services"]["crashed"]["stdoutTail"])
 
+    def test_interrupted_service_startup_reaps_spawned_process(self):
+        import os
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            group = runner.ServiceGroup(
+                Path(directory), ["rpc"], {"server": {
+                    "command": self.command("import time;time.sleep(30)"),
+                    "ready": {"unixSocket": "rpc", "timeoutSeconds": 5},
+                }}, {}, lambda program, args: [program, *args])
+            with mock.patch.object(group, "_await_ready", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    group.__enter__()
+            self.assertEqual(len(group.processes), 1)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(group.processes[0][1].pid, 0)
+
     def test_partial_service_startup_failure_cleans_ready_siblings(self):
         import os
         import signal
