@@ -182,6 +182,36 @@ def parse_nix_results(result, checks):
         raise ValueError("Nix --json omitted required check derivations")
     return realized
 
+def realize_roots(derivations, targets):
+    """One Nix build graph and a strict output proof, shared by CI backends."""
+    if not derivations or not targets:
+        raise ValueError("no Nix build roots supplied")
+    raw = subprocess.check_output(
+        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True)
+    # Derivation identities are keys as well as values: a check named like a
+    # runtime package cannot overwrite or hide another build root.
+    return parse_nix_results(json.loads(raw), {drv: drv for drv in derivations})
+
+
+def pin_prebuilt_tests(test_plan, realized, root, packages):
+    """Match and pin already-built test outputs without permitting compilation."""
+    if not test_plan["tests"]:
+        return
+    if not root:
+        raise ValueError("test-root required for executable test packages")
+    for name, item in test_plan["tests"].items():
+        if item["out"] not in realized.get(item["drv"], []):
+            raise ValueError(f"test package {name} output does not match evaluated plan")
+    link = Path(root)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["nix", "build", "--offline", "--no-substitute",
+         "--max-jobs", "0", "--option", "builders", "",
+         "--out-link", str(link),
+         *[packages.target(test_plan["system"], name)
+           for name in sorted(test_plan["tests"])]],
+        check=True)
+
 
 def build_command(args):
     plan = json.loads(Path(args.plan).read_text())
@@ -198,7 +228,7 @@ def build_command(args):
         raise ValueError("DAG builder checkout does not match plan commit")
     checks = plan["checks"]
     targets = [f".#checks.{plan['system']}.{name}" for name in sorted(checks)]
-    build_roots = dict(checks)
+    build_roots = set(checks.values())
     test_plan = None
     if getattr(args, "test_packages", None):
         import importlib.util
@@ -212,29 +242,13 @@ def build_command(args):
         if test_plan["tests"] and not getattr(args, "test_root", None):
             raise ValueError("test-root required for executable test packages")
         for name, item in sorted(test_plan["tests"].items()):
-            build_roots[f"test.{name}"] = item["drv"]
+            build_roots.add(item["drv"])
             targets.append(packages.target(plan["system"], name))
     # All compilation roots enter one global Nix dependency graph.
-    raw = subprocess.check_output(
-        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True,
-    )
-    all_realized = parse_nix_results(json.loads(raw), build_roots)
+    all_realized = realize_roots(build_roots, targets)
     realized = {drv: all_realized[drv] for drv in checks.values()}
-    if test_plan and test_plan["tests"]:
-        for name, item in test_plan["tests"].items():
-            if item["out"] not in all_realized[item["drv"]]:
-                raise ValueError(f"test package {name} output does not match evaluated plan")
-        root = Path(args.test_root)
-        root.parent.mkdir(parents=True, exist_ok=True)
-        # Only pin existing outputs; cannot silently recompile on this pass.
-        subprocess.run(
-            ["nix", "build", "--offline", "--no-substitute",
-             "--max-jobs", "0", "--option", "builders", "",
-             "--out-link", str(root),
-             *[packages.target(plan["system"], name)
-               for name in sorted(test_plan["tests"])]],
-            check=True,
-        )
+    if test_plan:
+        pin_prebuilt_tests(test_plan, all_realized, args.test_root, packages)
     evidence = {
         "schemaVersion": SCHEMA,
         "planDigest": plan["digest"],
