@@ -317,6 +317,43 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("exited before readiness", evidence["failures"][0]["reason"])
         self.assertIn("crash", evidence["services"]["crashed"]["stdoutTail"])
 
+    def test_partial_service_startup_failure_cleans_ready_siblings(self):
+        import os
+        import signal
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "ready.pid"
+            first = {"ref": {"fixture": "first", "field": "path"}}
+            server = (
+                "import os,pathlib,socket,sys,time;"
+                "pathlib.Path(sys.argv[2]).write_text(str(os.getpid()));"
+                "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                "time.sleep(30)"
+            )
+            try:
+                evidence = runner.test({
+                    "sockets": ["first", "second"],
+                    "services": {
+                        "a_ready": {
+                            "command": self.command(server, first, str(pidfile)),
+                            "ready": {"unixSocket": "first", "timeoutSeconds": 2}},
+                        "z_crash": {
+                            "command": self.command("import sys;sys.exit(7)"),
+                            "ready": {"unixSocket": "second", "timeoutSeconds": 2}},
+                    },
+                    "command": self.command("print('must-not-run')"),
+                })
+                self.assertEqual(evidence["status"], "fail")
+                self.assertIn("exited before readiness", evidence["failures"][0]["reason"])
+                self.assertEqual(evidence["steps"], [])
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_unknown_fixture_ref_rejected_before_side_effects(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
