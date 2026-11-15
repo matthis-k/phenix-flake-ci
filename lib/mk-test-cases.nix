@@ -11,5 +11,8 @@ if !builtins.isAttrs cases || cases == { } then
 else if !builtins.isString namePrefix then
   fail "namePrefix must be a string"
 else builtins.mapAttrs (key: spec:
-  mkTest ({ inherit pkgs; name = "${namePrefix}${key}"; } // spec)
+  if (spec.execution or "build") != "build" then
+    fail "case ${key} requests runtime execution; use mkSuite for runtime packages"
+  else
+    mkTest ({ inherit pkgs; name = "${namePrefix}${key}"; } // spec)
 ) tests
