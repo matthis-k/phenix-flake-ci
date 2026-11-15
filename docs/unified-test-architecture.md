@@ -59,7 +59,8 @@ stderr capture (1 MiB per stream by default), bounded service-log files
 and fresh temporary working directories.
 
 All command and fixture references are validated before launching a managed
-service. After failed startup, earlier services are rolled back. After a
+service. Content inspection of generated files is bounded to 16 MiB; size-only
+checks remain available for larger artifacts. After failed startup, earlier services are rolled back. After a
 test, service groups and command-step process groups are terminated, including
 children of exited parents and timed-out commands.
 
@@ -79,7 +80,8 @@ service-graph dependency resolution or network namespace isolation.
    realization, output matching and offline pinning helpers. Staged workers
    still use separate stores, so earlier-stage cross-worker deduplication
    remains less complete than the single-store trusted scheduler.
-3. Verify realized output paths against the frozen plan, and transfer their
+3. Verify realized output paths against the frozen plan, bind the staged join
+   evidence to the runtime-plan digest, and transfer their
    runtime closures to independent tester jobs.
 4. Execute test packages offline with `--no-substitute --max-jobs 0`; a test
    runner cannot quietly compile absent artifacts.

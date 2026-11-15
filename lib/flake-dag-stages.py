@@ -197,6 +197,13 @@ def verify_leaf(plan, stages, item):
 def join_command(args):
     plan, graph, stages = validated(args)
     ensure_commit(plan)
+    # Reject an invalid or foreign runtime plan before any store imports.
+    test_plan = packages.validate(packages.load(args.test_packages)) if getattr(
+        args, "test_packages", None) else None
+    if test_plan is not None and (
+            test_plan["commit"] != plan["commit"]
+            or test_plan["system"] != plan["system"]):
+        raise ValueError("test package plan must match exact-head Nix check plan")
     folder = Path(args.leaves)
     files = sorted(folder.rglob("evidence.json"))
     if len(files) != len(stages["shards"]):
@@ -222,8 +229,6 @@ def join_command(args):
         existing = planner.run_command(["nix", "path-info", "--offline", *paths]).splitlines()
         if set(existing) != set(paths):
             raise ValueError("missing realized fan-out outputs after import")
-    test_plan = packages.validate(packages.load(args.test_packages)) if getattr(
-        args, "test_packages", None) else None
     terminal = build_selected(plan, stages["finalChecks"], test_plan=test_plan,
                               test_root=getattr(args, "test_root", None))
     if set(results) & set(terminal):

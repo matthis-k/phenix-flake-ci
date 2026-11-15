@@ -289,3 +289,8 @@ Inventories exceeding GitHub's 256-job limit now fail at planning with a
 clear diagnostic, rather than failing later during matrix expansion.
 Future batching should preserve independent test evidence and reuse the
 existing runtime-package plan and final gate.
+
+File assertions that inspect UTF-8 text or JSON have a 16 MiB per-file
+inspection limit. Oversized files produce an explicit failed assertion rather
+than being read into unbounded memory. `size` and `exists` predicates remain
+available for arbitrarily large artifacts.

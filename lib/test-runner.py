@@ -21,6 +21,9 @@ from test_services import (DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT,
                            run_isolated, validate as validate_services)
 
 
+FILE_CONTENT_LIMIT = 16 * 1024 * 1024
+
+
 class InvalidSpec(ValueError):
     pass
 
@@ -476,6 +479,12 @@ def verify_files(root, files, prefix, failures, results, observations):
             check({"size": predicates["size"]}, {"size": path.stat().st_size},
                   label, failures, results, observations)
         if "text" in predicates or "json" in predicates:
+            if path.stat().st_size > FILE_CONTENT_LIMIT:
+                result = {"assertion": f"{label}.content", "pass": False,
+                          "reason": f"file exceeds content-inspection limit ({FILE_CONTENT_LIMIT} bytes); use size-only assertions"}
+                results.append(result)
+                failures.append(result)
+                continue
             try:
                 content = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as error:

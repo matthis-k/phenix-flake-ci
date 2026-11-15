@@ -260,6 +260,24 @@ class RunnerTests(unittest.TestCase):
             }}}})
         self.assertEqual(evidence["status"], "pass")
 
+    def test_large_sparse_file_rejects_content_inspection_without_loading_it(self):
+        limit = runner.FILE_CONTENT_LIMIT
+        script = (
+            "from pathlib import Path;"
+            f"p=Path('large.txt').open('wb');p.truncate({limit + 1});p.close()"
+        )
+        evidence = runner.test({
+            "command": self.command(script),
+            "expect": {"files": {"large.txt": {
+                "exists": True,
+                "size": {"gt": limit},
+                "text": {"contains": "unreachable"},
+            }}},
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertEqual(len(evidence["failures"]), 1)
+        self.assertIn("content-inspection limit", evidence["failures"][0]["reason"])
+
     def test_file_mismatch_reports_multiple_failures(self):
         evidence = runner.test({"command": self.command("from pathlib import Path;Path('data').write_text('wrong')"),
             "expect": {"files": {"data": {
