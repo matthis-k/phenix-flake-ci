@@ -2,7 +2,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/e7a3ca8092b61ff85b6a45bf863ea2b2d6a661b3";
     crane.url = "github:ipetkov/crane/79fd63528501446749c09f08cad486a58c7d173e";
-    crane.inputs.nixpkgs.follows = "nixpkgs";
     phenix-flake-ci.url = "path:../..";
   };
   outputs = { nixpkgs, crane, phenix-flake-ci, ... }:
