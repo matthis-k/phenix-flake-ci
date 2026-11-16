@@ -130,6 +130,12 @@ class TestFlakeChecks(unittest.TestCase):
                 Path("Cargo.lock").write_text("version two")
                 after = planner.make_plan(checks("a"), cfg, SHA)
                 self.assertNotEqual(first["cachePrefix"], after["cachePrefix"])
+                # The restore-only family is stable across incompatible
+                # lockfile digests; Nix still checks individual store paths.
+                self.assertEqual(
+                    first["cachePrefix"].rsplit("-", 1)[0],
+                    after["cachePrefix"].rsplit("-", 1)[0],
+                )
             finally:
                 os.chdir(previous)
 

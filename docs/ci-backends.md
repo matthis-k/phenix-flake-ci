@@ -100,6 +100,26 @@ uncommitted development. Local execution uses the host's Nix store/builders;
 it does not reproduce multi-runner isolation, artifact transport, GitHub
 status updates or the independent security context of hosted runners.
 
+## Cross-lockfile cache reuse
+
+The cache **write** key still includes the system, declared dependency inputs
+and the exact source SHA. Cache readers first try the exact compatible digest,
+then a broader **restore-only** prefix for the same cache family and Nix system.
+Nix reuses only store paths matching evaluated derivations; older outputs are
+not accepted as check evidence and cannot make a failing build green.
+
+The remote builder's explicit `cache_namespace` remains isolated from broad
+fallbacks, preserving cold/warm benchmark separation. Staged PR workflows
+restore trusted-main archives read-only and write only their PR-specific
+keys; downstream leaf/join jobs must still find the same-run shared prebuild.
+GitHub Actions branch access rules still apply: this is **not** a cross-sibling
+branch cache. An authorized external Nix binary cache remains the solution
+for broad branch/machine reuse without transferring large store archives.
+
+The tradeoff is an additional possibly stale archive download when the exact
+cache key changes. Compare cold/warm cache size, transfer duration and avoided
+recompilation before claiming a net speed improvement.
+
 ## Remote-builder trust and configuration
 
 The remote backend defaults to push to `main` and manual
