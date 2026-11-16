@@ -72,12 +72,9 @@ jobs:
             python3 "$runner" plan --system x86_64-linux --output "$tmp/plan.json"
             python3 "$runner" build --plan "$tmp/plan.json" --root "$tmp/test-roots"
             python3 "$runner" export --plan "$tmp/plan.json" --output "$tmp/closure.nar"
-            for case in rpc rpc-repeat; do
-              mkdir -p "$tmp/results/$case"
-              python3 "$runner" run --plan "$tmp/plan.json" \
-                --name "$case" --closure "$tmp/closure.nar" \
-                --output "$tmp/results/$case/evidence.json"
-            done
+            python3 "$runner" batch --plan "$tmp/plan.json" \
+              --names-json '["rpc","rpc-repeat"]' \
+              --closure "$tmp/closure.nar" --results "$tmp/results"
             python3 "$runner" verify --plan "$tmp/plan.json" --results "$tmp/results"
           )
 
@@ -312,15 +309,12 @@ jobs:
           cd "$work"
           test ! -e flake.nix
           test ! -d .git
-          for case in rpc rpc-repeat; do
-            mkdir -p "$GITHUB_WORKSPACE/offline-results/$case"
-            python3 "$handoff/runner.py" run \
-              --plan "$handoff/plan.json" \
-              --closure "$handoff/closure.nar" \
-              --name "$case" \
-              --expected-commit "$EXPECTED_COMMIT" \
-              --output "$GITHUB_WORKSPACE/offline-results/$case/evidence.json"
-          done
+          python3 "$handoff/runner.py" batch \
+            --plan "$handoff/plan.json" \
+            --closure "$handoff/closure.nar" \
+            --names-json '["rpc","rpc-repeat"]' \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --results "$GITHUB_WORKSPACE/offline-results"
           python3 "$handoff/runner.py" verify \
             --plan "$handoff/plan.json" \
             --results "$GITHUB_WORKSPACE/offline-results"

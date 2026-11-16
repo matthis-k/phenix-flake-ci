@@ -235,7 +235,7 @@ jobs:
           if-no-files-found: warn
 
   test:
-    name: Test package ${{ matrix.name }}
+    name: Runtime test batch ${{ matrix.id }}
     needs: [plan, coordinator]
     if: needs.coordinator.result == 'success' && needs.plan.outputs.test_count != '0'
     runs-on: ubuntu-24.04
@@ -276,19 +276,19 @@ jobs:
         with:
           name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-test-closure/
-      - name: Run exactly one already-built test package (no silent recompilation)
+      - name: Import closure once and execute all cases in the assigned batch
         env:
-          TEST_NAME: ${{ matrix.name }}
+          BATCH_NAMES: ${{ toJSON(matrix.names) }}
         run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py run \
-            --plan ci-plan/test-packages.json --name "$TEST_NAME" \
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py batch \
+            --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
             --closure ci-test-closure/closure.nar \
-            --output "ci-result/evidence.json"
+            --results "ci-result/"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: runnable-test-${{ matrix.name }}-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
-          path: ci-result/evidence.json
+          name: runnable-test-${{ matrix.id }}-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-result/
           if-no-files-found: warn
 
   acceptance:
