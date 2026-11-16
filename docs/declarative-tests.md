@@ -332,6 +332,7 @@ trusted and untrusted backend plans:
 ci.runtimeTests = {
   maxJobs = 16;    # bounds GitHub job fan-out (1..256)
   casesPerJob = 4; # target packing density, minimum one
+  timeoutSeconds = 300; # outer per-case timeout, 1..3600
 };
 ```
 

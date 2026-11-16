@@ -78,6 +78,7 @@ jobs:
           mkdir -p ci-offline-runtime
           tmp="$PWD/ci-offline-runtime"
           cp lib/flake-test-packages.py "$tmp/runner.py"
+          cp lib/test_services.py "$tmp/test_services.py"
           (
             cd tests/declarative-test-consumer
             runner=../../lib/flake-test-packages.py
@@ -96,6 +97,7 @@ jobs:
           name: offline-runtime-handoff
           path: |
             ci-offline-runtime/runner.py
+            ci-offline-runtime/test_services.py
             ci-offline-runtime/plan.json
             ci-offline-runtime/closure.nar
           if-no-files-found: error

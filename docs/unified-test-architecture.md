@@ -236,3 +236,17 @@ report fails the individual test and is recorded in its small, independent
 evidence file, rather than permitting unbounded memory use when several
 tests share a runner. This is distinct from the 16 MiB content-assertion
 limit and the 1 MiB process-stream capture limit.
+
+## Generic runtime test duration
+
+Executable test packages use the existing `test_services.run_isolated`
+process-group executor shared with declarative test steps. It imposes a
+**300-second default outer timeout per case**, kills its process group on
+completion/timeout, and bounds stdout and stderr to 1 MiB per stream.
+Failures retain bounded 4-KiB output tails in per-case evidence while
+later tests in the batch continue. The CI plan artifact carries this
+shared helper beside the pinned runtime runner, avoiding any new
+subprocess-lifecycle implementation. The typed policy
+`ci.runtimeTests.timeoutSeconds` allows 1–3600 seconds. Job-level
+timeouts remain independent, and process-group isolation does not
+constrain intentionally detached children as containers would.

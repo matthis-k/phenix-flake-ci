@@ -12,6 +12,7 @@ on:
       artifact_namespace: { type: string, default: "" }
       test_max_jobs: { type: number, default: 32 }
       tests_per_job: { type: number, default: 4 }
+      test_timeout_seconds: { type: number, default: 300 }
     secrets:
       TS_OAUTH_CLIENT_ID: { required: false }
       TS_AUDIENCE: { required: false }
@@ -91,6 +92,7 @@ jobs:
             --max-test-jobs "$MAX_TEST_JOBS" --tests-per-job "$TESTS_PER_JOB"
           # Store the exact pinned runner beside the immutable test manifest.
           cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py
+          cp .ci-tools/flake-ci/lib/test_services.py ci-plan/test_services.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
@@ -278,10 +280,11 @@ jobs:
         env:
           BATCH_NAMES: ${{ toJSON(matrix.names) }}
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CASE_TIMEOUT: ${{ inputs.test_timeout_seconds }}
         run: |
           python3 ci-plan/runtime-runner.py batch \
             --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
-            --expected-commit "$EXPECTED_COMMIT" \
+            --expected-commit "$EXPECTED_COMMIT" --timeout-seconds "$CASE_TIMEOUT" \
             --closure ci-test-closure/closure.nar \
             --results "ci-result/"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
