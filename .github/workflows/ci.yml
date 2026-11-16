@@ -340,7 +340,9 @@ jobs:
           ''')
           file.write_text(source)
           PY
-            git add flake.nix
+            # Nix may update the fixture's tracked lockfile during the
+            # first run; freeze every changed input into this second commit.
+            git add -A
             git commit -qm 'add independent failing check'
             if python3 ../../lib/flake-ci-local.py \
               --config ci/flake-check-config.nix \
