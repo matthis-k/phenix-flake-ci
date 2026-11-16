@@ -226,7 +226,7 @@ class RemoteBuildersTest(unittest.TestCase):
         # Runtime may continue after unrelated check failures, but never after
         # missing artifact handoff and never with a green final build gate.
         self.assertNotIn("needs.coordinator.result == 'success'", test_stage)
-        self.assertIn("test \\"$COORDINATOR\\" = success", acceptance)
+        self.assertIn('test "$COORDINATOR" = success', acceptance)
         self.assertIn("fromJSON(needs.plan.outputs.test_matrix)", test_stage)
         self.assertNotIn("cache-nix-action", test_stage)
         self.assertNotIn("Restore compiled test packages", test_stage)
