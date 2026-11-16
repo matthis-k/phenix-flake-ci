@@ -225,3 +225,12 @@ accidental relative-file contamination between sequential cases in a batch
 without misrepresenting the process-level isolation as a container or security
 sandbox. Tests depending on checkout-relative files must package those files
 into their Nix closure, rather than read the source tree from a test job.
+
+## Bounded runtime report ingestion
+
+Generated `runtime-result/result.json` is limited to 4 MiB before JSON
+parsing and must be a regular file, not a symlink. An oversized or invalid
+report fails the individual test and is recorded in its small, independent
+evidence file, rather than permitting unbounded memory use when several
+tests share a runner. This is distinct from the 16 MiB content-assertion
+limit and the 1 MiB process-stream capture limit.

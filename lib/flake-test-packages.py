@@ -20,6 +20,7 @@ SCHEMA = 2
 MAX_MATRIX_JOBS = 256  # GitHub Actions job-matrix hard limit.
 DEFAULT_MAX_TEST_JOBS = 32
 DEFAULT_TESTS_PER_JOB = 4
+MAX_RUNTIME_REPORT_BYTES = 4 * 1024 * 1024
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 STORE = re.compile(r"/nix/store/[a-z0-9]{32}-[A-Za-z0-9+._?=-]+\Z")
 EXE_NAME = re.compile(r"[A-Za-z0-9_+.-]+\Z")
@@ -51,6 +52,18 @@ def git_head():
 
 def load(path):
     return json.loads(Path(path).read_text())
+
+
+def read_runtime_report(path):
+    """Load generated test evidence with bounded memory and no symlink traversal."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("runtime report must be a regular non-symlink file")
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_RUNTIME_REPORT_BYTES + 1)
+    if len(raw) > MAX_RUNTIME_REPORT_BYTES:
+        raise ValueError(f"runtime report exceeds {MAX_RUNTIME_REPORT_BYTES} bytes")
+    return json.loads(raw)
 
 
 def save(path, value):
@@ -235,7 +248,7 @@ def execute_case(plan, name, path):
             subprocess.run([entry["exe"]], cwd=workspace,
                            env=environment, check=True)
         if runtime_report.exists():
-            details = load(runtime_report)
+            details = read_runtime_report(runtime_report)
             if not isinstance(details, dict) or details.get("status") != "pass":
                 raise ValueError("runtime test report is missing a passing status")
         result["status"] = "pass"
@@ -246,7 +259,7 @@ def execute_case(plan, name, path):
     finally:
         if runtime_report.exists():
             try:
-                result["runtime"] = load(runtime_report)
+                result["runtime"] = read_runtime_report(runtime_report)
             except (ValueError, OSError) as error:
                 result["runtimeError"] = f"cannot read runtime test report: {error}"
                 result["status"] = "failed"

@@ -300,6 +300,53 @@ else:
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "exact head"):
                 subject.verify_head(plan, bad)
 
+    def test_generated_runtime_report_is_bounded_and_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "result.json"
+            report.write_bytes(b"x" * (subject.MAX_RUNTIME_REPORT_BYTES + 1))
+            with self.assertRaisesRegex(ValueError, "runtime report exceeds"):
+                subject.read_runtime_report(report)
+            report.unlink()
+            secret = root / "outside.json"
+            secret.write_text('{"status":"pass"}')
+            report.symlink_to(secret)
+            with self.assertRaisesRegex(ValueError, "non-symlink"):
+                subject.read_runtime_report(report)
+            report.unlink()
+            report.write_text('{"status":"pass"}')
+            self.assertEqual(subject.read_runtime_report(report)["status"], "pass")
+
+    def test_large_runtime_report_produces_failed_evidence(self):
+        plan = test_plan(alpha=test_item("alpha"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "plan.json"
+            subject.save(manifest, plan)
+            archive = root / "closure.nar"
+            archive.write_bytes(b"nar")
+            args = type("Args", (), {
+                "plan": manifest, "names_json": '["alpha"]',
+                "results": root / "results", "closure": archive,
+                "expected_commit": C,
+            })()
+            def fake_run(argv, **kwargs):
+                if argv == ["nix-store", "--import"]:
+                    return subprocess.CompletedProcess(argv, 0)
+                runtime = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                runtime.mkdir(parents=True, exist_ok=True)
+                (runtime / "result.json").write_bytes(
+                    b"x" * (subject.MAX_RUNTIME_REPORT_BYTES + 1))
+                return subprocess.CompletedProcess(argv, 0)
+            with mock.patch.object(subject.subprocess, "run", side_effect=fake_run), mock.patch.object(
+                    subject.subprocess, "check_output", return_value=plan["tests"]["alpha"]["out"]+"\\n"):
+                with self.assertRaisesRegex(ValueError, "1 of 1 test packages failed"):
+                    subject.batch_command(args)
+            result = subject.load(args.results / "alpha" / "evidence.json")
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("runtime report exceeds", result["reason"])
+            self.assertIn("runtime report exceeds", result["runtimeError"])
+
     def test_rejects_executables_outside_manifest_output(self):
         item = test_item("unit")
         for exe in (item["out"] + "/bin/../escape",
