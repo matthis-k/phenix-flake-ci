@@ -183,11 +183,11 @@ def parse_nix_results(result, checks):
     return realized
 
 def realize_roots(derivations, targets):
-    """One Nix build graph and a strict output proof, shared by CI backends."""
+    """One Nix graph; continue independent roots but fail if any root fails."""
     if not derivations or not targets:
         raise ValueError("no Nix build roots supplied")
     raw = subprocess.check_output(
-        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True)
+        ["nix", "build", "--keep-going", "--no-link", "--json", "-L", *targets], text=True)
     # Derivation identities are keys as well as values: a check named like a
     # runtime package cannot overwrite or hide another build root.
     return parse_nix_results(json.loads(raw), {drv: drv for drv in derivations})

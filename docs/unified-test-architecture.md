@@ -311,3 +311,20 @@ same branch name (especially across forks), but must never cancel each
 other's test runs. Push-triggered invocations do not cancel each other,
 matching the generated caller workflow policy. This requires no new
 scheduler or worker state.
+
+## Exhaustive build failure behavior
+
+All multi-root Nix compile invocations use `--keep-going` with one native Nix graph.
+A failing derivation does not interrupt independent derivations; only dependents
+of the failed derivation cannot be built. The build step exits nonzero **after**
+Nix finishes its best-effort traversal. We do not turn errors into successful
+check evidence, publish failed outputs, or rebuild package roots one by one.
+
+GitHub matrix runners use `fail-fast: false`. A failed matrix job can be shown
+as failed while independent matrix jobs continue. A **single** Nix coordinator
+job cannot finish red before its own Nix invocation completes. Adding an
+independent reporter job for earlier red status is not currently justified by
+its extra credentials/coordination. Runtime tests still require the successful
+all-build synchronization barrier; they are not misreported as completed if
+required prebuilt artifacts are unavailable. This is failure-tolerant build
+scheduling, not a guarantee that all test processes run after failed compilation.

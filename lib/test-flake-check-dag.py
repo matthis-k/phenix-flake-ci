@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import tempfile
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -152,7 +153,7 @@ class DagTests(unittest.TestCase):
                     dag.subprocess, "check_output", return_value=json.dumps(raw)) as runner:
                 dag.build_command(args)
             runner.assert_called_once_with(
-                ["nix", "build", "--no-link", "--json", "-L",
+                ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
                  ".#checks.x86_64-linux.a", ".#checks.x86_64-linux.b",
                  ".#checks.x86_64-linux.shipping"], text=True)
             proof = type("Args", (), {"plan": args.plan, "graph": args.graph,
@@ -196,7 +197,7 @@ class DagTests(unittest.TestCase):
                     dag.subprocess, "run") as pinned:
                 dag.build_command(args)
             build.assert_called_once_with(
-                ["nix", "build", "--no-link", "--json", "-L",
+                ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
                  ".#checks.x86_64-linux.a", ".#checks.x86_64-linux.b",
                  ".#checks.x86_64-linux.shipping",
                  '.#packages.x86_64-linux."test.rpc"'], text=True)
@@ -216,6 +217,20 @@ class DagTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exact-head"):
                     dag.build_command(args)
                 should_not_build.assert_not_called()
+
+    def test_failed_nix_graph_propagates_failure_after_keep_going(self):
+        # Nix owns scheduling; the command is nonzero only after attempting
+        # every independent root. Never synthesize passing check evidence.
+        roots = {drv("a", "a"), drv("b", "b")}
+        with mock.patch.object(dag.subprocess, "check_output",
+                               side_effect=subprocess.CalledProcessError(100, ["nix", "build"])) as build:
+            with self.assertRaises(subprocess.CalledProcessError):
+                dag.realize_roots(roots, [".#checks.x86_64-linux.a",
+                                          ".#checks.x86_64-linux.b"])
+        arguments = build.call_args.args[0]
+        self.assertIn("--keep-going", arguments)
+        self.assertIn(".#checks.x86_64-linux.a", arguments)
+        self.assertIn(".#checks.x86_64-linux.b", arguments)
 
     def test_nix_results_fail_closed_on_missing_output_or_forged_drv(self):
         plan = mkplan()
