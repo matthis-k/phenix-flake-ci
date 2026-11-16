@@ -281,3 +281,15 @@ helper at planning time and **reject** any nonempty runtime inventory before
 dispatching builds. Consumers with runtime tests use the fully supported
 `nix-dag` or `nix-remote` backend instead. This is a deliberate
 fail-closed boundary, not a parallel test implementation.
+
+## Builder job minimalism
+
+The remote builder performs only three domain-neutral actions: install Nix,
+join the tailnet, and wait for the coordinating Nix scheduler to build
+derivations through ssh-ng. Previously every builder also checked out the
+entire CI library to run its `hostname` and `hold` helper. The existing
+exact-head plan artifact now carries a copy of the pinned worker script, so
+those four redundant repository checkouts are removed. The same pinned script
+and verified artifact handoff already serve runtime tester jobs. This does
+not alter Nix scheduling, Tailscale admission, worker privileges or output
+verification; its benefit is simpler provisioning and reduced setup I/O.
