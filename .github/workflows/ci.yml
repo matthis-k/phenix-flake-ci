@@ -139,6 +139,32 @@ jobs:
           test -s "$test_package/cargo-tests.json"
           test -d "$test_package/libexec"
 
+      - name: Prove shared Cargo dependency compilation and isolated crate failures
+        run: |
+          set -euo pipefail
+          fixture=./tests/cargo-deps-consumer
+          child=tests/cargo-test-consumer/crates/child/src/lib.rs
+          root="$fixture#checks.x86_64-linux.root"
+          child_test="$fixture#checks.x86_64-linux.child"
+          shared="$fixture#packages.x86_64-linux.ci-prebuild-cargo-deps-default"
+          # Native Nix builds both independent check roots, with one shared
+          # dependency artifact derivation and no test-specific scheduler.
+          nix build --no-write-lock-file --keep-going --no-link -L "$root" "$child_test"
+          original_deps="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$shared")"
+          trap 'git restore -- "$child"' EXIT
+          printf '\nTHIS_INTENTIONALLY_DOES_NOT_COMPILE!\n' >> "$child"
+          changed_deps="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$shared")"
+          test "$original_deps" = "$changed_deps"
+          # A real source error in one package cannot poison the sibling's
+          # check or cause another compilation of its shared dependency corpus.
+          if nix build --no-write-lock-file --keep-going --no-link -L \
+            "$root" "$child_test"; then
+            echo "intentionally broken Cargo crate unexpectedly passed" >&2
+            exit 1
+          fi
+          nix build --no-write-lock-file --offline --no-substitute --max-jobs 0 \
+            --no-link "$root"
+
       - name: Test generated Tailscale SSH remote-builder configuration
         run: python3 lib/test-nix-remote-workers.py -v
 
