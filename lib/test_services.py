@@ -28,6 +28,7 @@ def validate(socket_names, services, validate_command, validate_references):
         raise ValueError("socket names must start with a letter and be alphanumeric, underscore or hyphen")
     if not isinstance(services, dict):
         raise ValueError("services must be an attribute set")
+    readiness_owner = {}
     for name, service in services.items():
         if not isinstance(name, str) or not _NAME.fullmatch(name):
             raise ValueError("invalid service name")
@@ -41,6 +42,10 @@ def validate(socket_names, services, validate_command, validate_references):
         socket = ready.get("unixSocket")
         if socket not in socket_names:
             raise ValueError(f"service {name}: readiness socket must be declared in sockets")
+        if socket in readiness_owner:
+            raise ValueError(f"service {name}: readiness socket {socket} is already "
+                             f"owned by service {readiness_owner[socket]}")
+        readiness_owner[socket] = name
         timeout = ready.get("timeoutSeconds", 10)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
             raise ValueError(f"service {name}: readiness timeout must be positive")

@@ -366,6 +366,23 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(evidence["steps"], ["ping"])
         self.assertIn("server", evidence["services"])
 
+    def test_ambiguous_service_readiness_rejected_before_startup(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-service-start"
+            command = self.command(
+                f"from pathlib import Path;Path({str(marker)!r}).touch()")
+            with self.assertRaisesRegex(runner.InvalidSpec, "already owned by service first"):
+                runner.test({
+                    "sockets": ["rpc"],
+                    "services": {
+                        "first": {"command": command, "ready": {"unixSocket": "rpc"}},
+                        "second": {"command": command, "ready": {"unixSocket": "rpc"}},
+                    },
+                    "command": self.command("print('never')"),
+                })
+            self.assertFalse(marker.exists())
+
     def test_noisy_service_logs_are_bounded_and_retain_recent_tail(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:

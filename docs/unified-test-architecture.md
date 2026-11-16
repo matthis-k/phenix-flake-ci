@@ -59,7 +59,9 @@ stderr capture (1 MiB per stream by default), bounded service-log files
 and fresh temporary working directories.
 
 All command and fixture references are validated before launching a managed
-service. Content inspection of generated files is bounded to 16 MiB; size-only
+service. Every readiness socket has exactly one declared service owner;
+duplicate readiness claims fail preflight rather than allowing a false
+positive based on another service's socket file. Content inspection of generated files is bounded to 16 MiB; size-only
 checks remain available for larger artifacts. After failed startup, earlier services are rolled back. After a
 test, service groups and command-step process groups are terminated, including
 children of exited parents and timed-out commands.
