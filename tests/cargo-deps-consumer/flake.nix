@@ -9,18 +9,10 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       inherit (pkgs) lib;
-      group = member:
-        let
-          manifest = (pkgs.formats.toml { }).generate "Cargo.toml" {
-            workspace = {
-              members = [ member ];
-              resolver = "2";
-            };
-          };
-        in {
+      group = member: {
           packages = [ "cargo-deps-${member}" ];
-          # Include only this group and its workspace manifest/lock. Changes
-          # to the other group cannot invalidate this check's source path.
+          # Real selected members overlay the complete dummy workspace.
+          # Original full member list and Cargo.lock remain unchanged.
           src = lib.fileset.toSource {
             root = ./workspace;
             fileset = lib.fileset.unions [
@@ -29,7 +21,6 @@
               (./workspace + "/${member}")
             ];
           };
-          postUnpack = ''cp ${manifest} "$sourceRoot/Cargo.toml"'';
         };
       suite = phenix-flake-ci.lib.mkCargoDependencyChecks {
         inherit pkgs;
