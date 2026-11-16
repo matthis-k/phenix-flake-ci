@@ -268,7 +268,9 @@ jobs:
         if: always()
         run: |
           python3 .ci-tools/flake-ci/lib/nix-remote-workers.py stop \
-            --hosts ci-plan/hosts.json
+            --hosts ci-plan/hosts.json \
+            --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --count "${{ inputs.worker_count }}" --timeout 45
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
