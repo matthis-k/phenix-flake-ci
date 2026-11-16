@@ -35,8 +35,9 @@ jobs:
           set -euo pipefail
           nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${SOURCE_REV}" |
             jq -ce --arg rev "$SOURCE_REV" '
-              select(.rev == $rev or .resolvedUrl == ("github:" + env.GITHUB_REPOSITORY + "/" + $rev))
-              | {rev: $rev, narHash: .hash, path: .storePath}
+              {rev: $rev, narHash: (.locked.narHash // .hash),
+               locked: .locked, path: .storePath}
+              | select(.narHash | type == "string" and startswith("sha256-"))
             '
 
       - name: Test declarative assertions and negative cases
