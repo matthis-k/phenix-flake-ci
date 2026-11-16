@@ -104,7 +104,10 @@ class RemoteBuildersTest(unittest.TestCase):
             def invoke(*cmd, **kwargs):
                 if cmd[:2] == ("tailscale", "status"):
                     return type("Reply", (), {"stdout": json.dumps(next(replies))})()
-                self.assertEqual(cmd[:3], ("sudo", remote.LOCAL_NIX, "store"))
+                if cmd[:2] == ("sudo", "ssh"):
+                    self.assertEqual(cmd[-2:], ("touch", remote.STARTED))
+                else:
+                    self.assertEqual(cmd[:3], ("sudo", remote.LOCAL_NIX, "store"))
                 return type("Reply", (), {"stdout": ""})()
 
             with mock.patch.object(remote, "invoke", side_effect=invoke), \
@@ -145,6 +148,16 @@ class RemoteBuildersTest(unittest.TestCase):
             sleep.assert_called_once_with(3)
             self.assertEqual(released, ["runner@100.64.1.1", "runner@100.64.1.2"])
 
+    def test_unclaimed_worker_expires_without_waiting_full_build_timeout(self):
+        args = type("Args", (), {
+            "timeout": 1800, "startup_timeout": 1,
+        })()
+        with mock.patch.object(remote.Path, "is_file", return_value=False), \
+             mock.patch.object(remote.time, "monotonic",
+                               side_effect=[0, 0, 0, 2]):
+            with self.assertRaisesRegex(RuntimeError, "unclaimed.*expired"):
+                remote.hold(args)
+
     def test_matrix_outputs_json_for_job_matrix(self):
         with redirect_stdout(io.StringIO()) as buf:
             remote.matrix(type("A", (), {"count": 4})())
@@ -164,10 +177,17 @@ class RemoteBuildersTest(unittest.TestCase):
                     "Result", (), {"stdout": json.dumps(status)})()) as runner, \
                  mock.patch.object(remote, "ssh_config") as sshconf:
                 remote.discover(args)
-            self.assertEqual(runner.call_count, 3)
-            for call in runner.call_args_list[1:]:
-                self.assertEqual(call.args[:3], ("sudo", remote.LOCAL_NIX, "store"))
+            self.assertEqual(runner.call_count, 5)
+            ping = [call for call in runner.call_args_list if
+                    call.args[:3] == ("sudo", remote.LOCAL_NIX, "store")]
+            claims = [call for call in runner.call_args_list if
+                      call.args[:2] == ("sudo", "ssh")]
+            self.assertEqual(len(ping), 2)
+            self.assertEqual(len(claims), 2)
+            for call in ping:
                 self.assertIn("remote-program=", call.args[5])
+            for call in claims:
+                self.assertEqual(call.args[-2:], ("touch", remote.STARTED))
             sshconf.assert_called_once()
             lines = machines.read_text().splitlines()
             self.assertEqual(lines, [
@@ -240,6 +260,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("path: ci-plan/", worker)
         self.assertIn("ci-plan/remote-worker.py hostname", worker)
         self.assertIn("ci-plan/remote-worker.py hold", worker)
+        self.assertIn("--startup-timeout 360", worker)
         self.assertNotIn("actions/checkout@", worker)
         self.assertNotIn(".ci-tools/flake-ci/", worker)
         self.assertIn("cachix/install-nix-action@", worker)
