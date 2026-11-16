@@ -1,3 +1,12 @@
+/// Independently executable documentation regression.
+///
+/// ```
+/// assert_eq!(cargo_deps_b::product(), 9);
+/// ```
+pub fn product() -> u32 {
+    3 * 3
+}
+
 #[cfg(test)]
 mod tests {
     use once_cell::sync::Lazy;

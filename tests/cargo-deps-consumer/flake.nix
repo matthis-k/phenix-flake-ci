@@ -51,6 +51,9 @@
         groups = {
           a = group "a";
           b = group "b";
+          # A separate doctest check shares the *same* default-feature
+          # dependency corpus; it must not spawn a third prebuild profile.
+          "b-doc" = (group "b") // { targets = [ "--doc" ]; };
         };
       };
     in {

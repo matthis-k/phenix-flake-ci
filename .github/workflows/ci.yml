@@ -146,11 +146,12 @@ jobs:
           child=tests/cargo-deps-consumer/workspace/b/src/lib.rs
           root="$fixture#checks.x86_64-linux.a"
           child_test="$fixture#checks.x86_64-linux.b"
+          doc_test="$fixture#checks.x86_64-linux.b-doc"
           shared="$fixture#packages.x86_64-linux.ci-prebuild-cargo-deps-default"
-          # Native Nix builds both independent check roots, with one shared
-          # dependency artifact derivation and no test-specific scheduler.
-          nix build --no-write-lock-file --keep-going --no-link -L "$root" "$child_test"
-          for target in "$root" "$child_test"; do
+          # One shared dependency corpus, and independently failing unit and
+          # doc checks; doctests use only a target override, not a new profile.
+          nix build --no-write-lock-file --keep-going --no-link -L "$root" "$child_test" "$doc_test"
+          for target in "$root" "$child_test" "$doc_test"; do
             out="$(nix build --no-write-lock-file --no-link --print-out-paths "$target")"
             test ! -e "$out/target.tar.zst" || {
               echo "terminal Cargo test check retained a redundant target archive" >&2
@@ -160,18 +161,21 @@ jobs:
           original_deps="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$shared")"
           original_root="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$root")"
           original_child="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$child_test")"
+          original_doc="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$doc_test")"
           trap 'git restore -- "$child"' EXIT
           printf '\nTHIS_INTENTIONALLY_DOES_NOT_COMPILE!\n' >> "$child"
           changed_deps="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$shared")"
           test "$original_deps" = "$changed_deps"
           changed_root="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$root")"
           changed_child="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$child_test")"
+          changed_doc="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$doc_test")"
           test "$original_root" = "$changed_root"
           test "$original_child" != "$changed_child"
+          test "$original_doc" != "$changed_doc"
           # A real source error in one package cannot poison the sibling's
           # check or cause another compilation of its shared dependency corpus.
           if nix build --no-write-lock-file --keep-going --no-link -L \
-            "$root" "$child_test"; then
+            "$root" "$child_test" "$doc_test"; then
             echo "intentionally broken Cargo crate unexpectedly passed" >&2
             exit 1
           fi

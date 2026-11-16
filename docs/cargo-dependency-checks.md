@@ -43,6 +43,35 @@ each named group gets its own `cargoTest` check with `--locked` and
 `--no-fail-fast`. A failed real group need not block unrelated groups;
 a genuinely shared broken dependency naturally blocks its dependents.
 
+## Target-specific checks on one dependency profile
+
+When a profile selects `--all-targets`, Cargo still does **not** run
+Rustdoc tests. Add a separate target-only group instead of introducing a
+duplicate compilation profile:
+
+```nix
+groups = {
+  graph = {
+    packages = [ "example-graph" ];
+  };
+  "graph-doc" = {
+    packages = [ "example-graph" ];
+    targets = [ "--doc" ];
+  };
+  "graph-no-default-doc" = {
+    packages = [ "example-graph" ];
+    profile = "no-default";
+    targets = [ "--doc" ];
+  };
+};
+```
+
+`targets` replaces **only the target-selection flags** of the referenced
+profile; common feature flags such as `--no-default-features` are retained.
+For unusual test filters, provide extra `args`. Do not use target overrides
+to change dependency feature resolution; define another explicit profile
+for incompatible feature flags.
+
 ## Narrow rebuild inputs without changing workspace identity
 
 ```nix
