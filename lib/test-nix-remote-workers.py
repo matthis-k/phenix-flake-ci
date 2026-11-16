@@ -149,6 +149,21 @@ class RemoteBuildersTest(unittest.TestCase):
             self.assertEqual(output.getvalue().count("remote Nix store denied"), 1)
             self.assertFalse(Path(args.machines).exists())
 
+    def test_only_remote_execution_jobs_can_mint_oidc_tokens(self):
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        self.assertIn("permissions:\n  contents: read\n\njobs:", workflow)
+        plan = workflow.split("  plan:\n", 1)[1].split("  worker:\n", 1)[0]
+        worker = workflow.split("  worker:\n", 1)[1].split("  coordinator:\n", 1)[0]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
+        tester = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        acceptance = workflow.split("  acceptance:\n", 1)[1]
+        for script in (worker, coordinator):
+            self.assertIn("permissions:\n      contents: read\n      id-token: write", script)
+            self.assertIn("tailscale/github-action@", script)
+        for script in (plan, tester, acceptance):
+            self.assertNotIn("id-token: write", script)
+
     def test_builder_uses_pinned_plan_artifact_without_checkout(self):
         workflow = (Path(__file__).parent.parent /
                     ".github/workflows/flake-nix-builders.yml").read_text()
