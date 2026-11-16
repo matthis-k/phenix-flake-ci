@@ -150,6 +150,13 @@ jobs:
           # Native Nix builds both independent check roots, with one shared
           # dependency artifact derivation and no test-specific scheduler.
           nix build --no-write-lock-file --keep-going --no-link -L "$root" "$child_test"
+          for target in "$root" "$child_test"; do
+            out="$(nix build --no-write-lock-file --no-link --print-out-paths "$target")"
+            test ! -e "$out/target.tar.zst" || {
+              echo "terminal Cargo test check retained a redundant target archive" >&2
+              exit 1
+            }
+          done
           original_deps="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$shared")"
           original_root="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$root")"
           original_child="$(nix eval --raw --no-write-lock-file --apply 'd: d.drvPath' "$child_test")"
