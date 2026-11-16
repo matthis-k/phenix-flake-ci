@@ -93,5 +93,28 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
         self.assertIn("remote-${{ needs.plan.outputs.cache_prefix }}-", source)
 
 
+    def test_restore_only_cache_family_preserves_exact_write_keys(self):
+        planner = (ROOT / "lib/flake-check-plan.py").read_text()
+        self.assertIn('output.write("cache_family="', planner)
+        for name in (*WORKFLOWS, "flake-local-dag.yml"):
+            with self.subTest(workflow=name):
+                source = (ROOT / ".github" / "workflows" / name).read_text()
+                self.assertIn("cache_family", source)
+                self.assertIn("restore-prefixes-first-match:", source)
+                for line in source.splitlines():
+                    if "primary-key:" in line:
+                        self.assertNotIn("cache_family", line)
+        remote = (ROOT / ".github/workflows/flake-nix-builders.yml").read_text()
+        coordinator = remote.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
+        self.assertIn("inputs.cache_namespace == ''", coordinator)
+        self.assertIn("format('remote-{0}-', needs.plan.outputs.cache_family)", coordinator)
+        staged = (ROOT / ".github/workflows/flake-dag-staged.yml").read_text()
+        shared = staged.split("  shared:\n", 1)[1].split("  leaf:\n", 1)[0]
+        self.assertIn("remote-${{ needs.plan.outputs.cache_family }}-", shared)
+        self.assertIn("${{ needs.plan.outputs.cache_family }}-", shared)
+        self.assertNotIn("cache_family", staged.split("  leaf:\n", 1)[1])
+        self.assertIn("save: false", staged.split("  leaf:\n", 1)[1])
+
+
 if __name__ == "__main__":
     unittest.main()
