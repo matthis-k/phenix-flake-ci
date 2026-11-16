@@ -117,4 +117,11 @@ else if !builtins.isAttrs profiles || profiles == { } || !builtins.all
 else if !builtins.pathExists "${src}/Cargo.toml" || !builtins.pathExists lockFile then
   fail "src must contain a Cargo workspace and lockFile must exist"
 else
-  builtins.deepSeq validatedGroups { inherit checks packages; }
+  # Force the small validated declaration, not arbitrary Nix derivations
+  # embedded in group.src. Deep evaluation of a derivation attrset can walk
+  # recursive nixpkgs internals and overflow even for valid generated sources.
+  builtins.deepSeq
+    (builtins.mapAttrs (_: spec: {
+      inherit (spec) packages profile args;
+    }) validatedGroups)
+    { inherit checks packages; }
