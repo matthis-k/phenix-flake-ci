@@ -158,6 +158,7 @@ class TestPackageTests(unittest.TestCase):
             paths = "\n".join(sorted(x["out"] for x in plan["tests"].values())) + "\n"
             with mock.patch.object(subject, "git_head") as no_git, mock.patch.object(
                     subject.subprocess, "run", side_effect=fake_run), mock.patch.object(
+                    subject, "run_isolated", side_effect=fake_run), mock.patch.object(
                     subject.subprocess, "check_output", return_value=paths) as info:
                 with self.assertRaisesRegex(ValueError, "1 of 3 test packages failed"):
                     subject.batch_command(args)
@@ -181,6 +182,57 @@ class TestPackageTests(unittest.TestCase):
                 subject.verify_command(type("Args", (), {
                     "plan": manifest, "results": args.results,
                 })())
+
+    def test_timeout_preserves_per_case_failure_and_continues_batch(self):
+        plan = test_plan(**{name: test_item(name) for name in ("hang", "next")})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "plan.json"
+            subject.save(manifest, plan)
+            archive = root / "closure.nar"
+            archive.write_bytes(b"nar")
+            args = type("Args", (), {
+                "plan": manifest, "closure": archive,
+                "names_json": '["hang","next"]',
+                "results": root / "results", "expected_commit": C,
+                "timeout_seconds": 2,
+            })()
+            invoked = []
+            def fake_isolated(argv, **kwargs):
+                invoked.append(kwargs["timeout"])
+                if argv[0] == plan["tests"]["hang"]["exe"]:
+                    raise subprocess.TimeoutExpired(argv, kwargs["timeout"],
+                                                    output="begin", stderr="stuck")
+                runtime = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                runtime.mkdir(parents=True, exist_ok=True)
+                (runtime / "result.json").write_text('{"status":"pass"}')
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            info = "\n".join(sorted(x["out"] for x in plan["tests"].values())) + "\n"
+            with mock.patch.object(subject.subprocess, "run"), mock.patch.object(
+                    subject, "run_isolated", side_effect=fake_isolated), mock.patch.object(
+                    subject.subprocess, "check_output", return_value=info):
+                with self.assertRaisesRegex(ValueError, "1 of 2 test packages failed"):
+                    subject.batch_command(args)
+            self.assertEqual(invoked, [2, 2])
+            failed = subject.load(args.results / "hang" / "evidence.json")
+            self.assertEqual(failed["status"], "failed")
+            self.assertIn("timed out", failed["reason"])
+            self.assertEqual(failed["stderrTail"], "stuck")
+            self.assertEqual(subject.load(args.results / "next" / "evidence.json")["status"], "pass")
+
+    def test_case_timeout_limits_and_process_group_cleanup(self):
+        from test_services import run_isolated
+        for value in (0, -1, 3601, True, "15"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                subject.validate_timeout(value)
+        self.assertEqual(subject.validate_timeout(300), 300)
+        with tempfile.TemporaryDirectory() as directory:
+            script = ("import subprocess,sys,time; "
+                      "subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(30)']);"
+                      "time.sleep(30)")
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_isolated([sys.executable, "-c", script],
+                             cwd=directory, env=os.environ.copy(), timeout=0.2)
 
     def test_bad_batch_cannot_import_or_execute_anything(self):
         plan = test_plan(alpha=test_item("alpha"))
@@ -262,7 +314,8 @@ else:
 
             with mock.patch.dict(os.environ, env), mock.patch.object(
                     subject, "git_head", return_value=C), mock.patch.object(
-                    subject.subprocess, "run", side_effect=run_prebuilt):
+                    subject.subprocess, "run", side_effect=run_prebuilt), mock.patch.object(
+                    subject, "run_isolated", side_effect=run_prebuilt):
                 subject.export_command(export_args)
                 self.assertEqual(archive.read_bytes(), b"closure")
                 subject.run_command(run_args)
@@ -343,6 +396,7 @@ else:
                     b"x" * (subject.MAX_RUNTIME_REPORT_BYTES + 1))
                 return subprocess.CompletedProcess(argv, 0)
             with mock.patch.object(subject.subprocess, "run", side_effect=fake_run), mock.patch.object(
+                    subject, "run_isolated", side_effect=fake_run), mock.patch.object(
                     subject.subprocess, "check_output", return_value=plan["tests"]["alpha"]["out"]+"\n"):
                 with self.assertRaisesRegex(ValueError, "1 of 1 test packages failed"):
                     subject.batch_command(args)

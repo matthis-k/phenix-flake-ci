@@ -16,11 +16,16 @@ import subprocess
 import sys
 import tempfile
 
+from test_services import OutputLimitExceeded, run_isolated
+
 SCHEMA = 2
 MAX_MATRIX_JOBS = 256  # GitHub Actions job-matrix hard limit.
 DEFAULT_MAX_TEST_JOBS = 32
 DEFAULT_TESTS_PER_JOB = 4
 MAX_RUNTIME_REPORT_BYTES = 4 * 1024 * 1024
+DEFAULT_CASE_TIMEOUT_SECONDS = 300
+MAX_CASE_TIMEOUT_SECONDS = 3600
+CASE_OUTPUT_TAIL_BYTES = 4096
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 STORE = re.compile(r"/nix/store/[a-z0-9]{32}-[A-Za-z0-9+._?=-]+\Z")
 EXE_NAME = re.compile(r"[A-Za-z0-9_+.-]+\Z")
@@ -218,7 +223,14 @@ def verify_outputs(plan, names):
         raise ValueError("one or more prebuilt test outputs are missing")
 
 
-def execute_case(plan, name, path):
+def validate_timeout(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_CASE_TIMEOUT_SECONDS:
+        raise ValueError(f"case timeout must be between 1 and {MAX_CASE_TIMEOUT_SECONDS} seconds")
+    return value
+
+
+def execute_case(plan, name, path, timeout_seconds=DEFAULT_CASE_TIMEOUT_SECONDS):
+    timeout_seconds = validate_timeout(timeout_seconds)
     entry = plan["tests"][name]
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -244,17 +256,32 @@ def execute_case(plan, name, path):
                 XDG_CONFIG_HOME=str(Path(workspace) / ".config"),
                 XDG_DATA_HOME=str(Path(workspace) / ".local" / "share"),
             )
-            # No Nix evaluator, builder or substitute resolver on testers.
-            subprocess.run([entry["exe"]], cwd=workspace,
-                           env=environment, check=True)
+            # The declarative test runner's bounded process-group executor
+            # also manages generic Nix test binaries.
+            completed = run_isolated([entry["exe"]], cwd=workspace,
+                                     env=environment, timeout=timeout_seconds)
+            if completed.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    completed.returncode, completed.args,
+                    output=completed.stdout, stderr=completed.stderr)
         if runtime_report.exists():
             details = read_runtime_report(runtime_report)
             if not isinstance(details, dict) or details.get("status") != "pass":
                 raise ValueError("runtime test report is missing a passing status")
         result["status"] = "pass"
     except (ValueError, OSError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired, OutputLimitExceeded,
             json.JSONDecodeError) as error:
         result["reason"] = str(error)
+        for key, value in (
+            ("stdoutTail", getattr(error, "stdout", getattr(error, "output", None))),
+            ("stderrTail", getattr(error, "stderr", None)),
+        ):
+            if value:
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8", errors="replace")
+                result[key] = str(value)[-CASE_OUTPUT_TAIL_BYTES:]
+                print(f"{name} {key}: {result[key]}", file=sys.stderr)
         raise
     finally:
         if runtime_report.exists():
@@ -274,7 +301,8 @@ def run_command(args):
         raise ValueError("test job not in exact-head package inventory")
     import_closure(args.closure)
     verify_outputs(plan, [args.name])
-    execute_case(plan, args.name, args.output)
+    execute_case(plan, args.name, args.output,
+                 getattr(args, "timeout_seconds", DEFAULT_CASE_TIMEOUT_SECONDS))
 
 
 def batch_command(args):
@@ -295,8 +323,10 @@ def batch_command(args):
     failures = []
     for name in names:
         try:
-            execute_case(plan, name, Path(args.results) / name / "evidence.json")
+            execute_case(plan, name, Path(args.results) / name / "evidence.json",
+                         getattr(args, "timeout_seconds", DEFAULT_CASE_TIMEOUT_SECONDS))
         except (ValueError, OSError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, OutputLimitExceeded,
                 json.JSONDecodeError) as error:
             failures.append(name)
             print(f"FAIL: test package {name}: {error}", file=sys.stderr)
@@ -350,6 +380,7 @@ def main():
     c.add_argument("--output", required=True)
     c.add_argument("--closure", required=True)
     c.add_argument("--expected-commit", help="Exact source SHA for an artifact-only runner")
+    c.add_argument("--timeout-seconds", type=int, default=DEFAULT_CASE_TIMEOUT_SECONDS)
     c.set_defaults(func=run_command)
     batch = subs.add_parser("batch")
     batch.add_argument("--plan", required=True)
@@ -357,6 +388,7 @@ def main():
     batch.add_argument("--results", required=True)
     batch.add_argument("--closure", required=True)
     batch.add_argument("--expected-commit")
+    batch.add_argument("--timeout-seconds", type=int, default=DEFAULT_CASE_TIMEOUT_SECONDS)
     batch.set_defaults(func=batch_command)
     d = subs.add_parser("verify")
     d.add_argument("--plan", required=True)
