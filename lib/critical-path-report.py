@@ -89,6 +89,29 @@ def report(run, response, expected_head, *, diagnostic=False):
     last = max(metrics, key=lambda item: item["completed_at"])
     first = min(metrics, key=lambda item: item["started_at"])
     by_name = sorted(metrics, key=lambda item: (item["name"], item["id"]))
+    # Count only actual periods when no measured job was running. These
+    # gaps are not necessarily GitHub queueing: they may be intentional
+    # dependency/handoff barriers, and require investigation before tuning.
+    by_start = sorted(metrics, key=lambda item:
+                      (item["started_at"], item["completed_at"]))
+    covered_until = by_start[0]["completed_at"]
+    job_idle_gaps = 0.0
+    for item in by_start[1:]:
+        if item["started_at"] > covered_until:
+            job_idle_gaps += (item["started_at"] - covered_until).total_seconds()
+        if item["completed_at"] > covered_until:
+            covered_until = item["completed_at"]
+    # End events precede start events at identical timestamps. Omit
+    # zero-duration jobs, which use no observed concurrent time.
+    events = sorted(
+        event
+        for item in metrics if item["seconds"] > 0
+        for event in ((item["started_at"], 1), (item["completed_at"], -1))
+    )
+    concurrent = peak_running = 0
+    for _, delta in events:
+        concurrent += delta
+        peak_running = max(peak_running, concurrent)
     output = {
         "head": expected_head,
         "run_id": run.get("id"),
@@ -96,6 +119,8 @@ def report(run, response, expected_head, *, diagnostic=False):
         "workflow_wall_seconds": wall,
         "runner_minutes": round(sum(item["seconds"] for item in metrics) / 60, 2),
         "job_span_seconds": (last["completed_at"] - first["started_at"]).total_seconds(),
+        "job_idle_gap_seconds": job_idle_gaps,
+        "peak_running_jobs": peak_running,
         "initial_idle_seconds": (first["started_at"] - started).total_seconds(),
         "finalization_lag_seconds": (completed - last["completed_at"]).total_seconds(),
         "last_finished_job": last["name"],
