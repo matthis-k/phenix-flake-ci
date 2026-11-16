@@ -28,13 +28,12 @@ let
     && builtins.all (item: builtins.isString item && item != "") argv;
   validatedGroups = builtins.mapAttrs (name: spec:
     if !validName name || !builtins.isAttrs spec
-       || builtins.any (field: !(builtins.elem field [ "packages" "profile" "args" "src" "postUnpack" ]))
+       || builtins.any (field: !(builtins.elem field [ "packages" "profile" "args" "src" ]))
          (builtins.attrNames spec)
        || !validNames (spec.packages or null)
        || !validName (spec.profile or "default")
        || !(builtins.hasAttr (spec.profile or "default") profiles)
        || !validArgv (spec.args or [ ])
-       || !(builtins.isString (spec.postUnpack or ""))
     then fail "invalid packages, profile, or extra arguments in test group ${name}"
     else spec // { profile = spec.profile or "default"; args = spec.args or [ ]; }
   ) groups;
@@ -65,14 +64,23 @@ let
       );
     });
   }) usedProfiles);
+  # Optional per-group sources are overlays of real crate files, not
+  # alternative Cargo workspaces. Keep every member manifest in Crane's
+  # dummy source, preserving the original workspace/lockfile resolution.
+  # Group builds depend only on their selected real sources plus common
+  # dependency metadata, not on unrelated crate implementation changes.
+  dummyWorkspace = craneLib.mkDummySrc { inherit src; };
   checks = builtins.mapAttrs (name: spec:
     craneLib.cargoTest (common // {
       pname = "ci-test-${name}";
-      # A group can provide a narrowed workspace source and manifest rewrite.
-      # This preserves Nix's incremental rebuild granularity: changing an
-      # unrelated crate must not invalidate every independent test check.
-      src = spec.src or src;
-      postUnpack = spec.postUnpack or "";
+      src = if spec ? src then dummyWorkspace else src;
+      postUnpack =
+        if spec ? src then ''
+          # Overlay group implementation files without deleting manifests
+          # or dummy targets of unselected workspace members.
+          chmod -R u+w "$sourceRoot"
+          cp -r --no-preserve=mode ${spec.src}/. "$sourceRoot"/
+        '' else "";
       cargoArtifacts = deps.${spec.profile};
       # These are terminal checks: retaining an entire (potentially multi-GB)
       # Cargo target corpus after each independent test suite is redundant.
