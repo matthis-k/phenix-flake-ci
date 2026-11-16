@@ -20,6 +20,9 @@ let
     && builtins.substring 0 1 path != "/";
   backend = ci.backend or "matrix";
   remote = ci.remote or { };
+  runtimeTests = ci.runtimeTests or { };
+  maxTestJobs = runtimeTests.maxJobs or 32;
+  testsPerJob = runtimeTests.casesPerJob or 4;
   transport = remote.transport or "tailscale";
   workers = remote.workers or 4;
   slotsPerWorker = remote.slotsPerWorker or 2;
@@ -85,8 +88,14 @@ let
     nix-remote = "flake-nix-builders.yml";
   }.${backend} or (fail "unsupported CI backend: ${backend}");
   valid =
-    if !isAttrs ci || !keysWithin ci [ "backend" "remote" ] then
-      fail "ci must contain only backend and remote"
+    if !isAttrs ci || !keysWithin ci [ "backend" "remote" "runtimeTests" ] then
+      fail "ci must contain only backend, remote and runtimeTests"
+    else if !isAttrs runtimeTests || !keysWithin runtimeTests [ "maxJobs" "casesPerJob" ] then
+      fail "runtimeTests accepts only maxJobs and casesPerJob"
+    else if !builtins.isInt maxTestJobs || maxTestJobs < 1 || maxTestJobs > 256 then
+      fail "runtimeTests.maxJobs must be between 1 and 256"
+    else if !builtins.isInt testsPerJob || testsPerJob < 1 then
+      fail "runtimeTests.casesPerJob must be positive"
     else if !builtins.isString backend || !(builtins.elem backend [ "matrix" "nix-dag" "nix-remote" ]) then
       fail "backend must be matrix, nix-dag or nix-remote"
     else if !isAttrs remote || !keysWithin remote [ "transport" "workers" "slotsPerWorker" "credentials" ] then
@@ -158,6 +167,10 @@ let
       "      config: ${builtins.toJSON configPath}"
       "      library_ref: ${builtins.toJSON libraryRef}"
     ]
+    ++ (if backend == "matrix" then [ ] else [
+      "      test_max_jobs: ${toString maxTestJobs}"
+      "      tests_per_job: ${toString testsPerJob}"
+    ])
     ++ (if remoteSelected then [
       "      worker_count: ${toString workers}"
       "      slots_per_worker: ${toString slotsPerWorker}"

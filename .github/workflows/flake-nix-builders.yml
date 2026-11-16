@@ -10,6 +10,8 @@ on:
       cache_namespace: { type: string, default: "" }
       cache_max_store_size_linux: { type: string, default: "6G" }
       artifact_namespace: { type: string, default: "" }
+      test_max_jobs: { type: number, default: 32 }
+      tests_per_job: { type: number, default: 4 }
     secrets:
       TS_OAUTH_CLIENT_ID: { required: false }
       TS_AUDIENCE: { required: false }
@@ -79,10 +81,14 @@ jobs:
           echo "cache_prefix=$(jq -er .cachePrefix ci-plan/plan.json)" >> "$GITHUB_OUTPUT"
       - name: Discover runnable test.* packages from the flake
         id: runnable
+        env:
+          MAX_TEST_JOBS: ${{ inputs.test_max_jobs }}
+          TESTS_PER_JOB: ${{ inputs.tests_per_job }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
             --system "$(jq -er .system ci-plan/config.json)" \
-            --output ci-plan/test-packages.json
+            --output ci-plan/test-packages.json \
+            --max-test-jobs "$MAX_TEST_JOBS" --tests-per-job "$TESTS_PER_JOB"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}

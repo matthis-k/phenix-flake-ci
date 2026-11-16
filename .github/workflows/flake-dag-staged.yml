@@ -13,6 +13,8 @@ on:
       cache_max_store_size_linux:
         type: string
         default: "6G"
+      test_max_jobs: { type: number, default: 32 }
+      tests_per_job: { type: number, default: 4 }
 
 permissions:
   contents: read
@@ -80,10 +82,14 @@ jobs:
             --output ci-plan/stages.json
       - name: Discover runnable test packages in the same exact-head flake
         id: runnable
+        env:
+          MAX_TEST_JOBS: ${{ inputs.test_max_jobs }}
+          TESTS_PER_JOB: ${{ inputs.tests_per_job }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
             --system "$(jq -er .system ci-plan/config.json)" \
-            --output ci-plan/test-packages.json
+            --output ci-plan/test-packages.json \
+            --max-test-jobs "$MAX_TEST_JOBS" --tests-per-job "$TESTS_PER_JOB"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nix-dag-plan

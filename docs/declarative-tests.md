@@ -324,3 +324,18 @@ A shared runner is not a security isolation boundary. Use one test per job
 (`--tests-per-job 1 --max-test-jobs 256`) for small inventories requiring
 separate runners. Larger inventories need either batching or independent
 workflow partitioning; do not assume one GitHub job per test case.
+
+In generated paired workflows, use one typed resource budget for both
+trusted and untrusted backend plans:
+
+```nix
+ci.runtimeTests = {
+  maxJobs = 16;    # bounds GitHub job fan-out (1..256)
+  casesPerJob = 4; # target packing density, minimum one
+};
+```
+
+`mkFlakeCiWorkflows` validates the values and passes them to the selected
+native/staged backends. This affects only execution-job topology, not the
+consumer's test declarations, Nix compilation graph, trust decisions, or
+exact-head evidence checks.
