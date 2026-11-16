@@ -61,31 +61,31 @@ counters alone cannot prove semantic compilation reuse.
 
 Download the completed run and **all paginated** jobs for a specific commit:
 
-\`\`\`sh
+```sh
 gh api repos/OWNER/PROJECT/actions/runs/RUN_ID > run.json
 gh api --paginate --slurp \
-  repos/OWNER/PROJECT/actions/runs/RUN_ID/jobs?per_page=100 \
-  | jq -s '{total_count: ([.[][] | .jobs[]] | length), jobs: [.[][] | .jobs[]]}' \
+  'repos/OWNER/PROJECT/actions/runs/RUN_ID/jobs?per_page=100' \
+  | jq '{total_count: ([.[] | .jobs[]] | length), jobs: [.[] | .jobs[]]}' \
   > jobs.json
 python3 lib/critical-path-report.py --run run.json --jobs jobs.json --head HEAD_SHA
-\`\`\`
+```
 
-Alternatively, combine GitHub's paginated \`jobs\` arrays into
-\`{"total_count": N, "jobs": [...]}\` without dropping an entry.
+Alternatively, combine GitHub's paginated `jobs` arrays into
+`{"total_count": N, "jobs": [...]}` without dropping an entry.
 The reporter rejects incomplete inventories and wrong heads.
 
-For intentionally failing workflow benchmarks, add \`--diagnostic\`. The
+For intentionally failing workflow benchmarks, add `--diagnostic`. The
 output explicitly retains the failed run/job conclusions; the reporter
 does not make them passing evidence. Skipped jobs are listed separately
 and excluded from runner-minutes, even when GitHub omits their timestamps.
-The older \`tail_shard\` and \`shards\` fields appear only for workflows that
-actually contain \`Check shard-...\` job names. All layouts produce \`jobs\`
+The older `tail_shard` and `shards` fields appear only for workflows that
+actually contain `Check shard-...` job names. All layouts produce `jobs`
 and generic wall/runner-time fields.
 
 ## Phenix AI observation (2026-11-16)
 
 Source: [Phenix AI run 43857321453](https://github.com/matthis-k/phenix-ai/actions/runs/43857321453),
-exact head \`3f2c7cd081a39639a68f81fa76b871df77357e87\`.
+exact head `3f2c7cd081a39639a68f81fa76b871df77357e87`.
 
 - Workflow started 11:23:27Z, updated 11:25:58Z: **151 seconds**.
 - Eight executed jobs: **416 runner-seconds (6.93 runner-minutes)**.
@@ -104,7 +104,7 @@ claiming a speedup.
 ## Different-shape observation: Flake CI's own framework run
 
 Source: [Flake CI run 43854618477](https://github.com/matthis-k/phenix-flake-ci/actions/runs/43854618477),
-exact head \`9d31d9317f92f3ae4d364816b6a90a29258e17be\`.
+exact head `9d31d9317f92f3ae4d364816b6a90a29258e17be`.
 
 - Mixed Nix/Python framework tests and small Cargo fixture, **two sequential
   GitHub jobs** rather than four Nix remote builders.
@@ -115,7 +115,7 @@ exact head \`9d31d9317f92f3ae4d364816b6a90a29258e17be\`.
   finalization lag: 1 second; peak running jobs: 1.
 
 This demonstrates why a "four-worker" job-name filter or a
-\`Check shard-...\` requirement is not a general performance reporter.
+`Check shard-...` requirement is not a general performance reporter.
 The two runs execute different test inventories and cannot be used as
 an A/B speedup comparison.
 
