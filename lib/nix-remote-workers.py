@@ -15,6 +15,7 @@ import time
 
 SYSTEMS = {"x86_64-linux", "aarch64-linux"}
 COMPLETION = "/tmp/phenix-flake-ci-finished"
+STARTED = "/tmp/phenix-flake-ci-started"
 # GitHub's non-interactive SSH shells do not source /etc/profile.d/nix.sh.
 # Use the absolute executable installed by cachix/install-nix-action.
 REMOTE_DAEMON = "/nix/var/nix/profiles/default/bin/nix-daemon"
@@ -129,6 +130,15 @@ def discover(args):
                     print(f"Nix ssh-ng probe failed for {name}: {reason}", flush=True)
                     last_errors[name] = reason
                 continue
+            # Mark the worker as claimed only after proving both the Nix
+            # remote-store protocol and its authenticated SSH control path.
+            # Unclaimed workers self-retire after the bounded startup grace.
+            try:
+                invoke("sudo", "ssh", f"runner@{ip}", "touch", STARTED,
+                       timeout=12)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                print(f"Worker startup lease failed for {name}: {exc}", flush=True)
+                continue
             ready[name] = ip
             print(f"Builder ready: {name}", flush=True)
         if len(ready) != count:
@@ -215,10 +225,15 @@ def stop(args):
 
 def hold(args):
     end = time.monotonic() + positive(args.timeout, 1, 3600)
+    startup_end = time.monotonic() + positive(args.startup_timeout, 1, 900)
+    claimed = False
     while time.monotonic() < end:
         if Path(COMPLETION).is_file():
             print("Remote worker released by coordinator")
             return
+        claimed = claimed or Path(STARTED).is_file()
+        if not claimed and time.monotonic() >= startup_end:
+            raise RuntimeError("unclaimed remote worker startup lease expired")
         time.sleep(4)
     raise RuntimeError("coordinator did not release worker before deadline")
 
@@ -265,6 +280,7 @@ def main():
     s.set_defaults(func=stop)
     w = sub.add_parser("hold")
     w.add_argument("--timeout", type=int, default=1800)
+    w.add_argument("--startup-timeout", type=int, default=360)
     w.set_defaults(func=hold)
     args = p.parse_args()
     try:
