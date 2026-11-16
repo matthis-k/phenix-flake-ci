@@ -209,7 +209,8 @@ class TestPackageTests(unittest.TestCase):
         final = workflow.split("  acceptance:\n", 1)[1]
         self.assertIn("runtime_ready: ${{ steps.runtime_ready.outputs.ready }}",
                       coordinator)
-        self.assertIn("always() && steps.build.outcome != 'skipped'", coordinator)
+        self.assertIn("!cancelled() && steps.build.outcome != 'skipped'", coordinator)
+        self.assertIn("!cancelled() && needs.plan.result == 'success'", tester)
         self.assertIn("flake-test-packages.py probe", coordinator)
         self.assertIn("flake-test-packages.py export", coordinator)
         self.assertIn("--available ci-test-closure/available.json", coordinator)
