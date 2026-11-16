@@ -71,7 +71,7 @@ class StagedDagTests(unittest.TestCase):
             realized = stages.build_selected(plan, selected)
         self.assertEqual(set(realized), set(selected))
         nix.assert_called_once_with(
-            ["nix", "build", "--no-link", "--json", "-L",
+            ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
              ".#checks.x86_64-linux.model", ".#checks.x86_64-linux.tools"],
             text=True)
 
@@ -95,7 +95,7 @@ class StagedDagTests(unittest.TestCase):
                     plan, ["integration"], test_plan=tests, test_root=str(root))
             self.assertEqual(set(result), {"integration"})
             built.assert_called_once_with(
-                ["nix", "build", "--no-link", "--json", "-L",
+                ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
                  ".#checks.x86_64-linux.integration",
                  '.#packages.x86_64-linux."test.rpc"'],
                 text=True)
