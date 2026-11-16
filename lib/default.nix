@@ -11,6 +11,8 @@ let
   testAssert = import ./test-assert.nix;
   mkTestCases = import ./mk-test-cases.nix;
   mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
+  mkCargoTestChecks = import ./mk-cargo-test-checks.nix;
+  mkCargoWorkspace = import ./mk-cargo-workspace.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
   renderGithubWorkflow = import ./render-github-workflow.nix;
@@ -123,6 +125,8 @@ in
     mkFlakeCiWorkflows
     mkCargoTestPackage
     mkCargoTestPackages
+    mkCargoTestChecks
+    mkCargoWorkspace
     rustCheckStrategy
     mkMaintenance
     mkMaintenanceOutputs
