@@ -134,7 +134,7 @@ class TestPackageTests(unittest.TestCase):
             self.assertEqual(argv[:3], ["nix", "path-info", "--offline"])
             if len(argv) > 4 or argv[-1] == plan["tests"]["beta"]["out"]:
                 raise subprocess.CalledProcessError(1, argv)
-            return argv[-1] + "\\n"
+            return argv[-1] + "\n"
 
         with mock.patch.object(subject.subprocess, "check_output",
                                side_effect=query), mock.patch.object(
@@ -202,11 +202,11 @@ class TestPackageTests(unittest.TestCase):
     def test_runtime_partial_workflow_never_weakens_final_evidence(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/flake-nix-builders.yml").read_text()
-        coordinator = workflow.split("  coordinator:\\n", 1)[1].split(
-            "  test:\\n", 1)[0]
-        tester = workflow.split("  test:\\n", 1)[1].split(
-            "  acceptance:\\n", 1)[0]
-        final = workflow.split("  acceptance:\\n", 1)[1]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split(
+            "  test:\n", 1)[0]
+        tester = workflow.split("  test:\n", 1)[1].split(
+            "  acceptance:\n", 1)[0]
+        final = workflow.split("  acceptance:\n", 1)[1]
         self.assertIn("runtime_ready: ${{ steps.runtime_ready.outputs.ready }}",
                       coordinator)
         self.assertIn("always() && steps.build.outcome != 'skipped'", coordinator)
