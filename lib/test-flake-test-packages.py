@@ -126,6 +126,98 @@ class TestPackageTests(unittest.TestCase):
         for forbidden in ("TS_OAUTH", "id-token: write", "nix build", "secrets: inherit"):
             self.assertNotIn(forbidden, runner)
 
+    def test_probe_preserves_independently_built_runtime_packages(self):
+        plan = test_plan(**{n: test_item(n) for n in ("alpha", "beta", "gamma")})
+        available = {"alpha", "gamma"}
+
+        def query(argv, **kwargs):
+            self.assertEqual(argv[:3], ["nix", "path-info", "--offline"])
+            if len(argv) > 4 or argv[-1] == plan["tests"]["beta"]["out"]:
+                raise subprocess.CalledProcessError(1, argv)
+            return argv[-1] + "\\n"
+
+        with mock.patch.object(subject.subprocess, "check_output",
+                               side_effect=query), mock.patch.object(
+                Path, "is_file", return_value=True), mock.patch.object(
+                subject.os, "access", return_value=True):
+            ready = subject.availability_for(plan, sorted(plan["tests"]))
+        self.assertEqual(ready, sorted(available))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "available.json"
+            subject.save(manifest, subject.availability_plan(plan, ready))
+            self.assertEqual(subject.read_availability(plan, manifest), available)
+            original = subject.load(manifest)
+            for mutation in (
+                    {**original, "digest": "forged"},
+                    {**original, "available": ["alpha", "alpha"]},
+                    {**original, "available": ["missing"]},
+                    {**original, "commit": "f" * 40}):
+                subject.save(manifest, mutation)
+                with self.assertRaisesRegex(ValueError, "invalid|stale"):
+                    subject.read_availability(plan, manifest)
+
+    def test_partial_runtime_batch_runs_siblings_and_never_passes_blocked_test(self):
+        plan = test_plan(**{n: test_item(n) for n in ("alpha", "beta", "gamma")})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "plan.json"
+            availability = root / "available.json"
+            subject.save(manifest, plan)
+            subject.save(availability, subject.availability_plan(
+                plan, ["alpha", "gamma"]))
+            args = type("Args", (), {
+                "plan": manifest, "local": True, "available": availability,
+                "closure": None, "expected_commit": None,
+                "names_json": '["alpha","beta","gamma"]',
+                "results": root / "results",
+            })()
+            ran = []
+
+            def execute(argv, **kwargs):
+                ran.append(argv[0])
+                location = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                location.mkdir(parents=True, exist_ok=True)
+                (location / "result.json").write_text('{"status":"pass"}')
+                return subprocess.CompletedProcess(argv, 0, "", "")
+
+            with mock.patch.object(subject, "verify_head"), mock.patch.object(
+                    subject, "verify_outputs") as verified, mock.patch.object(
+                    subject, "import_closure") as imported, mock.patch.object(
+                    subject, "run_isolated", side_effect=execute):
+                with self.assertRaisesRegex(ValueError, "1 of 3 test packages failed"):
+                    subject.batch_command(args)
+                verified.assert_called_once_with(plan, ["alpha", "gamma"])
+                imported.assert_not_called()
+            self.assertEqual(ran, [plan["tests"][n]["exe"] for n in ("alpha", "gamma")])
+            self.assertEqual([
+                subject.load(root / "results" / n / "evidence.json")["status"]
+                for n in ("alpha", "beta", "gamma")], ["pass", "blocked", "pass"])
+            self.assertIn("required runtime output", subject.load(
+                root / "results/beta/evidence.json")["reason"])
+            with self.assertRaisesRegex(ValueError, "failed, stale"):
+                subject.verify_command(type("Args", (), {
+                    "plan": manifest, "results": root / "results"})())
+
+    def test_runtime_partial_workflow_never_weakens_final_evidence(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        coordinator = workflow.split("  coordinator:\\n", 1)[1].split(
+            "  test:\\n", 1)[0]
+        tester = workflow.split("  test:\\n", 1)[1].split(
+            "  acceptance:\\n", 1)[0]
+        final = workflow.split("  acceptance:\\n", 1)[1]
+        self.assertIn("runtime_ready: ${{ steps.runtime_ready.outputs.ready }}",
+                      coordinator)
+        self.assertIn("always() && steps.build.outcome != 'skipped'", coordinator)
+        self.assertIn("flake-test-packages.py probe", coordinator)
+        self.assertIn("flake-test-packages.py export", coordinator)
+        self.assertIn("--available ci-test-closure/available.json", coordinator)
+        self.assertIn("needs.coordinator.outputs.runtime_ready == 'true'", tester)
+        self.assertIn("--available ci-test-closure/available.json", tester)
+        self.assertIn('test "$COORDINATOR" = success', final)
+        self.assertIn("flake-test-packages.py verify", final)
+
     def test_batch_imports_closure_once_and_retains_individual_failure_evidence(self):
         plan = test_plan(**{name: test_item(name) for name in ("alpha", "beta", "gamma")})
         with tempfile.TemporaryDirectory() as directory:
