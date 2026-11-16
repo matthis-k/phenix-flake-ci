@@ -177,8 +177,10 @@ Runtime test jobs must not inject `GITHUB_TOKEN` into Nix's
 `access-tokens` setting. The install action can add that token by default,
 so both backends explicitly configure an empty `access-tokens` value on
 test-only jobs, and neither passes the token as an installer input. Test jobs
-retain read-only `contents` permissions and checkout with
-`persist-credentials: false`. This reduces exposed authority but does not
+retain read-only `contents` permissions, check out only the pinned CI library,
+and pass GitHub's exact source SHA as the manifest authority. The consumer
+repository is not checked out on runtime tester jobs. This reduces exposed
+authority but does not
 isolate arbitrary test executables from the host or guarantee network
 confinement. Higher-trust secrets must stay out of test jobs.
 
@@ -212,3 +214,14 @@ store paths offline, runs each frozen executable and writes
 other cases, and the final acceptance gate rejects missing, repeated, stale,
 or failed case evidence. The existing single-case `run` command remains
 available for jobs requiring independent runner isolation, not as a legacy shim.
+
+## Per-case workspace discipline
+
+Every direct runtime executable, including a generic third-party package,
+starts from a fresh temporary working directory with independent `HOME`,
+`TMPDIR` and XDG user cache/config/data paths. `PHENIX_TEST_OUTPUT` remains
+a stable evidence directory outside the temporary workspace. This prevents
+accidental relative-file contamination between sequential cases in a batch
+without misrepresenting the process-level isolation as a container or security
+sandbox. Tests depending on checkout-relative files must package those files
+into their Nix closure, rather than read the source tree from a test job.

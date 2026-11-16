@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 SCHEMA = 2
 MAX_MATRIX_JOBS = 256  # GitHub Actions job-matrix hard limit.
@@ -216,10 +217,23 @@ def execute_case(plan, name, path):
     runtime_dir.mkdir(parents=True, exist_ok=True)
     runtime_report = runtime_dir / "result.json"
     runtime_report.unlink(missing_ok=True)
-    environment = dict(os.environ, PHENIX_TEST_OUTPUT=str(runtime_dir.resolve()))
     try:
-        # No Nix evaluator, builder or substitute resolver on tester jobs.
-        subprocess.run([entry["exe"]], env=environment, check=True)
+        # The executable may be a generic package rather than mkTest's own
+        # runner. Give every case fresh cwd and user cache/config state so
+        # bundled tests cannot accidentally share relative files.
+        with tempfile.TemporaryDirectory(prefix="phenix-ci-case-") as workspace:
+            environment = dict(
+                os.environ,
+                PHENIX_TEST_OUTPUT=str(runtime_dir.resolve()),
+                HOME=workspace,
+                TMPDIR=workspace,
+                XDG_CACHE_HOME=str(Path(workspace) / ".cache"),
+                XDG_CONFIG_HOME=str(Path(workspace) / ".config"),
+                XDG_DATA_HOME=str(Path(workspace) / ".local" / "share"),
+            )
+            # No Nix evaluator, builder or substitute resolver on testers.
+            subprocess.run([entry["exe"]], cwd=workspace,
+                           env=environment, check=True)
         if runtime_report.exists():
             details = load(runtime_report)
             if not isinstance(details, dict) or details.get("status") != "pass":

@@ -79,6 +79,8 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn("toJSON(matrix.names)", test)
         self.assertIn("--results dag-test-result/", test)
         self.assertIn("matrix.id", test)
+        self.assertIn("--expected-commit", test)
+        self.assertNotIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", test)
         self.assertIn("access-tokens =", test)
         self.assertNotIn("github_access_token:", test)
         self.assertNotIn("secrets.GITHUB_TOKEN", test)
@@ -101,6 +103,8 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn("toJSON(matrix.names)", runner)
         self.assertIn("--results \"ci-result/\"", runner)
         self.assertIn("matrix.id", runner)
+        self.assertIn("--expected-commit", runner)
+        self.assertNotIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", runner)
         self.assertIn("--closure ci-test-closure/closure.nar", runner)
         self.assertIn("save: false", runner)
         self.assertIn("contents: read", runner)
@@ -133,6 +137,13 @@ class TestPackageTests(unittest.TestCase):
                 self.assertEqual(len(argv), 1)
                 name = next(name for name, item in plan["tests"].items()
                             if item["exe"] == argv[0])
+                workspace = Path(kwargs["cwd"])
+                self.assertEqual(kwargs["env"]["HOME"], str(workspace))
+                self.assertEqual(kwargs["env"]["TMPDIR"], str(workspace))
+                if name == "alpha":
+                    (workspace / "marker").write_text("alpha-only")
+                else:
+                    self.assertFalse((workspace / "marker").exists())
                 if name == "beta":
                     raise subprocess.CalledProcessError(7, argv)
                 runtime_dir = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
@@ -237,6 +248,8 @@ else:
                     raise subprocess.CalledProcessError(9, argv)
                 self.assertTrue(Path(os.environ["IMPORTED"]).exists())
                 directory = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                self.assertEqual(kwargs["env"]["HOME"], kwargs["cwd"])
+                self.assertEqual(kwargs["env"]["TMPDIR"], kwargs["cwd"])
                 directory.mkdir(parents=True, exist_ok=True)
                 (directory / "result.json").write_text(json.dumps(
                     {"status": "pass", "assertions": [

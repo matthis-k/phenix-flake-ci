@@ -288,10 +288,6 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
           repository: matthis-k/phenix-flake-ci
           ref: ${{ inputs.library_ref }}
           path: .ci-tools/flake-ci
@@ -313,9 +309,11 @@ jobs:
       - name: Import prebuilt closure once and run the assigned batch
         env:
           BATCH_NAMES: ${{ toJSON(matrix.names) }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py batch \
             --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
+            --expected-commit "$EXPECTED_COMMIT" \
             --closure dag-test-closure/closure.nar \
             --results dag-test-result/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
