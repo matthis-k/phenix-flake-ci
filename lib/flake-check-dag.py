@@ -182,6 +182,36 @@ def parse_nix_results(result, checks):
         raise ValueError("Nix --json omitted required check derivations")
     return realized
 
+def realize_roots(derivations, targets):
+    """One Nix build graph and a strict output proof, shared by CI backends."""
+    if not derivations or not targets:
+        raise ValueError("no Nix build roots supplied")
+    raw = subprocess.check_output(
+        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True)
+    # Derivation identities are keys as well as values: a check named like a
+    # runtime package cannot overwrite or hide another build root.
+    return parse_nix_results(json.loads(raw), {drv: drv for drv in derivations})
+
+
+def pin_prebuilt_tests(test_plan, realized, root, packages):
+    """Match and pin already-built test outputs without permitting compilation."""
+    if not test_plan["tests"]:
+        return
+    if not root:
+        raise ValueError("test-root required for executable test packages")
+    for name, item in test_plan["tests"].items():
+        if item["out"] not in realized.get(item["drv"], []):
+            raise ValueError(f"test package {name} output does not match evaluated plan")
+    link = Path(root)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["nix", "build", "--offline", "--no-substitute",
+         "--max-jobs", "0", "--option", "builders", "",
+         "--out-link", str(link),
+         *[packages.target(test_plan["system"], name)
+           for name in sorted(test_plan["tests"])]],
+        check=True)
+
 
 def build_command(args):
     plan = json.loads(Path(args.plan).read_text())
@@ -198,13 +228,27 @@ def build_command(args):
         raise ValueError("DAG builder checkout does not match plan commit")
     checks = plan["checks"]
     targets = [f".#checks.{plan['system']}.{name}" for name in sorted(checks)]
-    # Nix evaluates all outputs together, scheduling every ready dependency
-    # exactly once on this runner. No check is skipped and no manual wave
-    # barriers serialize independent derivations.
-    raw = subprocess.check_output(
-        ["nix", "build", "--no-link", "--json", "-L", *targets], text=True,
-    )
-    realized = parse_nix_results(json.loads(raw), checks)
+    build_roots = set(checks.values())
+    test_plan = None
+    if getattr(args, "test_packages", None):
+        import importlib.util
+        module_spec = importlib.util.spec_from_file_location(
+            "flake_test_packages", Path(__file__).with_name("flake-test-packages.py"))
+        packages = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(packages)
+        test_plan = packages.validate(packages.load(args.test_packages))
+        if test_plan["commit"] != plan["commit"] or test_plan["system"] != plan["system"]:
+            raise ValueError("test package plan must match exact-head Nix check plan")
+        if test_plan["tests"] and not getattr(args, "test_root", None):
+            raise ValueError("test-root required for executable test packages")
+        for name, item in sorted(test_plan["tests"].items()):
+            build_roots.add(item["drv"])
+            targets.append(packages.target(plan["system"], name))
+    # All compilation roots enter one global Nix dependency graph.
+    all_realized = realize_roots(build_roots, targets)
+    realized = {drv: all_realized[drv] for drv in checks.values()}
+    if test_plan:
+        pin_prebuilt_tests(test_plan, all_realized, args.test_root, packages)
     evidence = {
         "schemaVersion": SCHEMA,
         "planDigest": plan["digest"],
@@ -219,7 +263,7 @@ def build_command(args):
     }
     save(args.output, evidence)
     print(f"PASS: {len(checks)} exact-head checks, "
-          f"{len(realized)} unique check derivations, one Nix build graph")
+          f"{len(all_realized)} unique root derivations, one Nix build graph")
 
 
 def verify_command(args):
@@ -282,6 +326,8 @@ def main():
     b.add_argument("--plan", required=True)
     b.add_argument("--graph", required=True)
     b.add_argument("--output", required=True)
+    b.add_argument("--test-packages")
+    b.add_argument("--test-root")
     b.set_defaults(func=build_command)
     c = subs.add_parser("verify")
     c.add_argument("--plan", required=True)

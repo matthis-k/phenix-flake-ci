@@ -20,6 +20,7 @@ let
   branches = trusted.branches or [ ];
   workflowDispatch = trusted.workflowDispatch or false;
   remote = trusted.remote or { };
+  runtimeTests = ci.runtimeTests or { };
   prBackend = pr.backend or "nix-dag";
   prAuthors = trusted.pullRequestAuthors or [ ];
   valid =
@@ -27,8 +28,8 @@ let
       || !builtins.isString trustedName || trustedName == ""
       || !builtins.isString prName || prName == "" then
       fail "names may only override nonempty trusted and pullRequest names"
-    else if !isAttrs ci || !keysWithin ci [ "trusted" "pullRequest" ] then
-      fail "CI policy must define only trusted and pullRequest"
+    else if !isAttrs ci || !keysWithin ci [ "trusted" "pullRequest" "runtimeTests" ] then
+      fail "CI policy must define only trusted, pullRequest and runtimeTests"
     else if !isAttrs trusted || !keysWithin trusted
       [ "repository" "branches" "backend" "remote" "workflowDispatch" "pullRequestAuthors" ] then
       fail "trusted CI accepts repository, branches, backend, remote and workflowDispatch"
@@ -48,7 +49,7 @@ in
 assert valid;
 {
   trusted = mk {
-    ci = { backend = "nix-remote"; inherit remote; };
+    ci = { backend = "nix-remote"; inherit remote runtimeTests; };
     inherit configPath libraryRef;
     name = trustedName;
     events = {
@@ -60,7 +61,7 @@ assert valid;
   };
 
   pullRequest = mk {
-    ci = { backend = prBackend; };
+    ci = { backend = prBackend; inherit runtimeTests; };
     inherit configPath libraryRef;
     name = prName;
     events = {

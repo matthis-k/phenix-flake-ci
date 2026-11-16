@@ -18,6 +18,16 @@ class LocalDagWorkflowTest(unittest.TestCase):
         self.assertIn("remote-${{ steps.plan.outputs.cache_prefix }}-", text)
         self.assertIn("persist-credentials: false", text)
 
+    def test_build_only_local_dag_fails_before_compiling_runtime_inventory(self):
+        text = WORKFLOW.read_text()
+        plan = text.split("      - name: Evaluate full exact-head check inventory and dependency DAG", 1)[1]
+        plan = plan.split("      - name: Restore compatible verified-main", 1)[0]
+        self.assertIn("flake-test-packages.py plan", plan)
+        self.assertIn("--output ci-plan/runtime-inventory.json", plan)
+        self.assertIn("'.tests | length > 0'", plan)
+        self.assertIn("Runtime test.* packages require", plan)
+        self.assertIn("exit 1", plan)
+
     def test_full_exact_head_with_one_build_and_verified_evidence(self):
         text = WORKFLOW.read_text()
         self.assertIn("github.event.pull_request.head.sha || github.sha", text)

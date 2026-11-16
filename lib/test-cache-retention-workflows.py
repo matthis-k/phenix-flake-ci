@@ -39,6 +39,17 @@ class CacheRetentionWorkflowTests(unittest.TestCase):
                 self.assertNotIn('gc-max-store-size-linux: "4G"', source)
         self.assertEqual(defaults, {"6G"})
 
+    def test_build_only_matrix_cannot_silently_skip_runtime_packages(self):
+        source = (ROOT / ".github" / "workflows" / "flake-checks.yml").read_text()
+        plan = source.split("  plan:\n", 1)[1].split("  prebuild:\n", 1)[0]
+        self.assertIn("flake-test-packages.py plan", plan)
+        self.assertIn("--output ci-plan/runtime-inventory.json", plan)
+        self.assertIn("'.tests | length > 0'", plan)
+        self.assertIn("Runtime test.* packages require", plan)
+        self.assertLess(plan.index("flake-test-packages.py plan"),
+                        plan.index("actions/upload-artifact@"))
+        self.assertIn("exit 1", plan)
+
     def test_read_only_shards_never_publish_shared_store(self):
         for name in ("flake-checks.yml", "flake-dag-staged.yml"):
             source = (ROOT / ".github" / "workflows" / name).read_text()

@@ -13,13 +13,16 @@ on:
       cache_max_store_size_linux:
         type: string
         default: "6G"
+      test_max_jobs: { type: number, default: 32 }
+      tests_per_job: { type: number, default: 4 }
+      test_timeout_seconds: { type: number, default: 300 }
 
 permissions:
   contents: read
 
 concurrency:
-  group: nix-dag-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  group: nix-dag-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   plan:
@@ -29,6 +32,8 @@ jobs:
       matrix: ${{ steps.stages.outputs.matrix }}
       digest: ${{ steps.plan.outputs.digest }}
       cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+      test_matrix: ${{ steps.runnable.outputs.tests }}
+      test_count: ${{ steps.runnable.outputs.test_count }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -76,6 +81,19 @@ jobs:
           python3 .ci-tools/flake-ci/lib/flake-dag-stages.py plan \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --output ci-plan/stages.json
+      - name: Discover runnable test packages in the same exact-head flake
+        id: runnable
+        env:
+          MAX_TEST_JOBS: ${{ inputs.test_max_jobs }}
+          TESTS_PER_JOB: ${{ inputs.tests_per_job }}
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
+            --system "$(jq -er .system ci-plan/config.json)" \
+            --output ci-plan/test-packages.json \
+            --max-test-jobs "$MAX_TEST_JOBS" --tests-per-job "$TESTS_PER_JOB"
+          # Store the exact pinned runner beside the immutable test manifest.
+          cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py
+          cp .ci-tools/flake-ci/lib/test_services.py ci-plan/test_services.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nix-dag-plan
@@ -234,20 +252,122 @@ jobs:
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-plan.py prebuild-local \
             --plan ci-plan/plan.json --prebuild ci-plan/prebuild.json
-      - name: Import completed check outputs and build dependent roots
+      - name: Import outputs and compile final checks plus runtime packages
         run: |
           python3 .ci-tools/flake-ci/lib/flake-dag-stages.py join \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --stages ci-plan/stages.json --leaves dag-leaves \
+            --test-packages ci-plan/test-packages.json \
+            --test-root "${RUNNER_TEMP}/phenix-dag-runnable-roots" \
             --output dag-final/evidence.json
-      - name: Exact-head DAG evidence gate
+      - name: Exact-head DAG and runtime-package evidence gate
         run: |
           python3 .ci-tools/flake-ci/lib/flake-dag-stages.py verify \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
-            --stages ci-plan/stages.json --evidence dag-final/evidence.json
+            --stages ci-plan/stages.json --evidence dag-final/evidence.json \
+            --test-packages ci-plan/test-packages.json
+      - name: Export verified prebuilt test runtime closure
+        if: needs.plan.outputs.test_count != '0'
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py export \
+            --plan ci-plan/test-packages.json --output dag-test-closure/closure.nar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: needs.plan.outputs.test_count != '0'
+        with:
+          name: nix-dag-test-closure
+          path: dag-test-closure/closure.nar
+          if-no-files-found: error
+          compression-level: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: nix-dag-final-evidence
           path: dag-final/evidence.json
           if-no-files-found: error
+
+  test:
+    name: Runtime test batch ${{ matrix.id }}
+    needs: [plan, join]
+    if: needs.join.result == 'success' && needs.plan.outputs.test_count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
+    steps:
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          # Never persist an API token into Nix configuration on runners
+          # executing potentially untrusted runtime packages.
+          extra_nix_config: |
+            access-tokens =
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-test-closure
+          path: dag-test-closure/
+      - name: Import prebuilt closure once and run the assigned batch
+        env:
+          BATCH_NAMES: ${{ toJSON(matrix.names) }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CASE_TIMEOUT: ${{ inputs.test_timeout_seconds }}
+        run: |
+          python3 ci-plan/runtime-runner.py batch \
+            --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
+            --expected-commit "$EXPECTED_COMMIT" --timeout-seconds "$CASE_TIMEOUT" \
+            --closure dag-test-closure/closure.nar \
+            --results dag-test-result/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dag-runnable-test-${{ matrix.id }}
+          path: dag-test-result/
+          if-no-files-found: warn
+
+  acceptance:
+    name: Require complete Nix DAG and runnable test evidence
+    needs: [plan, shared, leaf, join, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require complete build and expected test outcomes
+        env:
+          PLAN: ${{ needs.plan.result }}
+          SHARED: ${{ needs.shared.result }}
+          LEAF: ${{ needs.leaf.result }}
+          JOIN: ${{ needs.join.result }}
+          TESTS: ${{ needs.test.result }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
+        run: |
+          test "$PLAN" = success
+          test "$SHARED" = success
+          test "$LEAF" = success
+          test "$JOIN" = success
+          if [ "$TEST_COUNT" = 0 ]; then
+            test "$TESTS" = skipped
+          else
+            test "$TESTS" = success
+          fi
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.plan.outputs.test_count != '0'
+        with:
+          pattern: dag-runnable-test-*
+          path: dag-runnable-evidence/
+      - name: Verify all discovered test packages have complete exact-head evidence
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
+            --plan ci-plan/test-packages.json --results dag-runnable-evidence/

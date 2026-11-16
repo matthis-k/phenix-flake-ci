@@ -28,6 +28,18 @@ jobs:
             experimental-features = nix-command flakes
             accept-flake-config = true
 
+      - name: Show immutable flake identity for downstream consumers
+        env:
+          SOURCE_REV: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          nix flake prefetch --json "github:${GITHUB_REPOSITORY}/${SOURCE_REV}" |
+            jq -ce --arg rev "$SOURCE_REV" '
+              {rev: $rev, narHash: (.locked.narHash // .hash),
+               locked: .locked, path: .storePath}
+              | select(.narHash | type == "string" and startswith("sha256-"))
+            '
+
       - name: Test declarative assertions and negative cases
         run: python3 lib/test-test-runner.py -v
 
@@ -50,6 +62,46 @@ jobs:
             echo "invalid expectation unexpectedly succeeded" >&2
             exit 1
           fi
+
+      - name: Verify prebuilt process scenario runs without tester-side compilation
+        run: |
+          set -euo pipefail
+          for case in rpc rpc-repeat; do
+            target="./tests/declarative-test-consumer#packages.x86_64-linux.\"test.${case}\""
+            nix build --no-write-lock-file --no-link "$target"
+            nix run --no-write-lock-file --offline --no-substitute --max-jobs 0 "$target"
+          done
+
+      - name: Exercise full exact-head runtime package plan, NAR and evidence path
+        run: |
+          set -euo pipefail
+          mkdir -p ci-offline-runtime
+          tmp="$PWD/ci-offline-runtime"
+          cp lib/flake-test-packages.py "$tmp/runner.py"
+          cp lib/test_services.py "$tmp/test_services.py"
+          (
+            cd tests/declarative-test-consumer
+            runner=../../lib/flake-test-packages.py
+            python3 "$runner" plan --system x86_64-linux --output "$tmp/plan.json"
+            python3 "$runner" build --plan "$tmp/plan.json" --root "$tmp/test-roots"
+            python3 "$runner" export --plan "$tmp/plan.json" --output "$tmp/closure.nar"
+            python3 "$runner" batch --plan "$tmp/plan.json" \
+              --names-json '["rpc","rpc-repeat"]' \
+              --closure "$tmp/closure.nar" --results "$tmp/results"
+            python3 "$runner" verify --plan "$tmp/plan.json" --results "$tmp/results"
+          )
+
+      - name: Upload prebuilt runtime closure for independent runner
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-runtime-handoff
+          path: |
+            ci-offline-runtime/runner.py
+            ci-offline-runtime/test_services.py
+            ci-offline-runtime/plan.json
+            ci-offline-runtime/closure.nar
+          if-no-files-found: error
+          compression-level: 1
 
       - name: Test dependency impact planner
         run: python3 lib/test-cargo-impact.py -v
@@ -241,3 +293,48 @@ jobs:
 
       - name: Evaluate flake
         run: nix flake check --no-build
+
+  offline-runtime:
+    name: Execute prebuilt packages without source checkout
+    needs: eval
+    if: needs.eval.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens =
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: offline-runtime-handoff
+          path: handoff/
+      - name: Verify isolated Nix closure and exact-head test evidence
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          handoff="$GITHUB_WORKSPACE/handoff"
+          mkdir -p "$GITHUB_WORKSPACE/offline-results"
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          cd "$work"
+          test ! -e flake.nix
+          test ! -d .git
+          python3 "$handoff/runner.py" batch \
+            --plan "$handoff/plan.json" \
+            --closure "$handoff/closure.nar" \
+            --names-json '["rpc","rpc-repeat"]' \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --results "$GITHUB_WORKSPACE/offline-results"
+          python3 "$handoff/runner.py" verify \
+            --plan "$handoff/plan.json" \
+            --results "$GITHUB_WORKSPACE/offline-results"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: offline-runtime-evidence
+          path: offline-results/
+          if-no-files-found: warn

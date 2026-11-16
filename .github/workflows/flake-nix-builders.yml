@@ -10,6 +10,9 @@ on:
       cache_namespace: { type: string, default: "" }
       cache_max_store_size_linux: { type: string, default: "6G" }
       artifact_namespace: { type: string, default: "" }
+      test_max_jobs: { type: number, default: 32 }
+      tests_per_job: { type: number, default: 4 }
+      test_timeout_seconds: { type: number, default: 300 }
     secrets:
       TS_OAUTH_CLIENT_ID: { required: false }
       TS_AUDIENCE: { required: false }
@@ -17,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   plan:
@@ -79,10 +81,18 @@ jobs:
           echo "cache_prefix=$(jq -er .cachePrefix ci-plan/plan.json)" >> "$GITHUB_OUTPUT"
       - name: Discover runnable test.* packages from the flake
         id: runnable
+        env:
+          MAX_TEST_JOBS: ${{ inputs.test_max_jobs }}
+          TESTS_PER_JOB: ${{ inputs.tests_per_job }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
             --system "$(jq -er .system ci-plan/config.json)" \
-            --output ci-plan/test-packages.json
+            --output ci-plan/test-packages.json \
+            --max-test-jobs "$MAX_TEST_JOBS" --tests-per-job "$TESTS_PER_JOB"
+          # Store the exact pinned runner beside the immutable test manifest.
+          cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py
+          cp .ci-tools/flake-ci/lib/test_services.py ci-plan/test_services.py
+          cp .ci-tools/flake-ci/lib/nix-remote-workers.py ci-plan/remote-worker.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
@@ -93,23 +103,24 @@ jobs:
     name: Nix builder ${{ matrix.index }}
     needs: plan
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         index: ${{ fromJSON(needs.plan.outputs.workers) }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          repository: matthis-k/phenix-flake-ci
-          ref: ${{ inputs.library_ref }}
-          path: .ci-tools/flake-ci
-          persist-credentials: false
       - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nix_config: |
             trusted-users = root runner
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-plan/
       - name: Assign unique ephemeral host identity
         id: node
         env:
@@ -118,7 +129,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           ATTEMPT: ${{ github.run_attempt }}
         run: |
-          python3 .ci-tools/flake-ci/lib/nix-remote-workers.py hostname \
+          python3 ci-plan/remote-worker.py hostname \
             --run-id "$RUN_ID" --attempt "$ATTEMPT" \
             --count "$COUNT" --index "$INDEX" >> "$GITHUB_OUTPUT"
       - name: Connect worker and enable Tailscale SSH
@@ -131,12 +142,15 @@ jobs:
           hostname: ${{ steps.node.outputs.hostname }}
           args: --ssh
       - name: Serve derivations until coordinator signals completion
-        run: python3 .ci-tools/flake-ci/lib/nix-remote-workers.py hold --timeout 1800
+        run: python3 ci-plan/remote-worker.py hold --timeout 1800
 
   coordinator:
     name: Nix DAG scheduler / ${{ inputs.worker_count }} builders
     needs: plan
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -208,7 +222,7 @@ jobs:
           name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-test-closure/closure.nar
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 1
       - name: Verify complete DAG shipping evidence
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
@@ -235,7 +249,7 @@ jobs:
           if-no-files-found: warn
 
   test:
-    name: Test package ${{ matrix.name }}
+    name: Runtime test batch ${{ matrix.id }}
     needs: [plan, coordinator]
     if: needs.coordinator.result == 'success' && needs.plan.outputs.test_count != '0'
     runs-on: ubuntu-24.04
@@ -245,47 +259,36 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          repository: matthis-k/phenix-flake-ci
-          ref: ${{ inputs.library_ref }}
-          path: .ci-tools/flake-ci
-          persist-credentials: false
       - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          # Never persist an API token into Nix configuration on runners
+          # executing potentially untrusted runtime packages.
+          extra_nix_config: |
+            access-tokens =
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-plan/
-      - name: Restore compiled test packages read-only
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
-        with:
-          primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
-          restore-prefixes-first-match: |
-            remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
-          save: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-test-closure/
-      - name: Run exactly one already-built test package (no silent recompilation)
+      - name: Import closure once and execute all cases in the assigned batch
         env:
-          TEST_NAME: ${{ matrix.name }}
+          BATCH_NAMES: ${{ toJSON(matrix.names) }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CASE_TIMEOUT: ${{ inputs.test_timeout_seconds }}
         run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py run \
-            --plan ci-plan/test-packages.json --name "$TEST_NAME" \
+          python3 ci-plan/runtime-runner.py batch \
+            --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
+            --expected-commit "$EXPECTED_COMMIT" --timeout-seconds "$CASE_TIMEOUT" \
             --closure ci-test-closure/closure.nar \
-            --output "ci-result/evidence.json"
+            --results "ci-result/"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: runnable-test-${{ matrix.name }}-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
-          path: ci-result/evidence.json
+          name: runnable-test-${{ matrix.id }}-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
+          path: ci-result/
           if-no-files-found: warn
 
   acceptance:

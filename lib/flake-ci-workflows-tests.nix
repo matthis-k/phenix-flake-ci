@@ -123,6 +123,23 @@ in
     assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" value == null;
     true;
 
+  sharedRuntimeTestBudgetAppliesToBothTrustDomains =
+    let
+      custom = make (policy // {
+        runtimeTests = { maxJobs = 16; casesPerJob = 2; timeoutSeconds = 120; };
+      });
+      owner = flat custom.trusted;
+      untrusted = flat custom.pullRequest;
+    in
+    assert builtins.match ".*test_max_jobs: 16.*tests_per_job: 2.*test_timeout_seconds: 120.*" owner != null;
+    assert builtins.match ".*test_max_jobs: 16.*tests_per_job: 2.*" untrusted != null;
+    assert fail (policy // { runtimeTests.maxJobs = 0; });
+    assert fail (policy // { runtimeTests.maxJobs = 257; });
+    assert fail (policy // { runtimeTests.casesPerJob = true; });
+    assert fail (policy // { runtimeTests.unexpected = 1; });
+    assert fail (policy // { runtimeTests.timeoutSeconds = -1; });
+    true;
+
   prMatrixIsStillCredentialFree =
     let
       value = flat (make (policy // { pullRequest.backend = "matrix"; })).pullRequest;

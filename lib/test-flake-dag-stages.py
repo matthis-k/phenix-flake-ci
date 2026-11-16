@@ -75,6 +75,97 @@ class StagedDagTests(unittest.TestCase):
              ".#checks.x86_64-linux.model", ".#checks.x86_64-linux.tools"],
             text=True)
 
+    def test_join_compiles_final_checks_and_runtime_packages_in_one_graph(self):
+        plan, _ = sample()
+        tests = {"schemaVersion": 2, "commit": SHA, "system": plan["system"],
+                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc"), "exe": store("r", "rpc") + "/bin/test-rpc"}}}
+        tests["digest"] = stages.packages.digest(tests)
+        outputs = [
+            {"drvPath": plan["checks"]["integration"],
+             "outputs": {"out": store("x", "integration")}},
+            {"drvPath": drv("r", "rpc"),
+             "outputs": {"out": store("r", "rpc")}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "roots"
+            with mock.patch.object(stages.subprocess, "check_output",
+                                   return_value=json.dumps(outputs)) as built, mock.patch.object(
+                    stages.subprocess, "run") as pinned:
+                result = stages.build_selected(
+                    plan, ["integration"], test_plan=tests, test_root=str(root))
+            self.assertEqual(set(result), {"integration"})
+            built.assert_called_once_with(
+                ["nix", "build", "--no-link", "--json", "-L",
+                 ".#checks.x86_64-linux.integration",
+                 '.#packages.x86_64-linux."test.rpc"'],
+                text=True)
+            pinned.assert_called_once()
+            self.assertIn("--no-substitute", pinned.call_args.args[0])
+            self.assertIn(str(root), pinned.call_args.args[0])
+
+    def test_stale_runtime_package_plan_fails_before_any_build(self):
+        plan, _ = sample()
+        tests = {"schemaVersion": 2, "commit": "b" * 40, "system": plan["system"],
+                 "tests": {"rpc": {"drv": drv("r", "rpc"), "out": store("r", "rpc"), "exe": store("r", "rpc") + "/bin/test-rpc"}}}
+        tests["digest"] = stages.packages.digest(tests)
+        with mock.patch.object(stages.subprocess, "check_output") as no_build:
+            with self.assertRaisesRegex(ValueError, "exact-head"):
+                stages.build_selected(
+                    plan, ["integration"], test_plan=tests, test_root="/tmp/roots")
+            no_build.assert_not_called()
+
+    def test_stale_runtime_manifest_blocks_join_before_import(self):
+        plan, graph = sample()
+        manifest = stages.partition(plan, graph)
+        test_plan = {"schemaVersion": 2, "commit": "b" * 40,
+                     "system": plan["system"], "tests": {}}
+        test_plan["digest"] = stages.packages.digest(test_plan)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename, value in (("plan.json", plan), ("graph.json", graph),
+                                    ("stages.json", manifest), ("tests.json", test_plan)):
+                stages.save(root / filename, value)
+            args = type("Args", (), {
+                "plan": root / "plan.json", "graph": root / "graph.json",
+                "stages": root / "stages.json", "test_packages": root / "tests.json",
+                "leaves": root / "absent-leaves", "test_root": root / "roots",
+                "output": root / "evidence.json",
+            })()
+            with mock.patch.object(stages, "ensure_commit"), mock.patch.object(
+                    stages.subprocess, "run") as no_import:
+                with self.assertRaisesRegex(ValueError, "exact-head"):
+                    stages.join_command(args)
+                no_import.assert_not_called()
+
+    def test_join_verifier_binds_runtime_manifest_digest(self):
+        plan, graph = sample()
+        manifest = stages.partition(plan, graph)
+        test_plan = {"schemaVersion": 2, "commit": SHA,
+                     "system": plan["system"], "tests": {}}
+        test_plan["digest"] = stages.packages.digest(test_plan)
+        check_evidence = {
+            name: {"drv": drvpath, "status": "pass", "outputs": [store("x", name)]}
+            for name, drvpath in plan["checks"].items()
+        }
+        proof = stages.evidence(plan, manifest, "join", check_evidence)
+        proof["testPlanDigest"] = test_plan["digest"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename, value in (("plan.json", plan), ("graph.json", graph),
+                                    ("stages.json", manifest), ("tests.json", test_plan),
+                                    ("evidence.json", proof)):
+                stages.save(root / filename, value)
+            args = type("Args", (), {
+                "plan": root / "plan.json", "graph": root / "graph.json",
+                "stages": root / "stages.json", "test_packages": root / "tests.json",
+                "evidence": root / "evidence.json",
+            })()
+            stages.verify_command(args)
+            proof["testPlanDigest"] = "0" * 64
+            stages.save(args.evidence, proof)
+            with self.assertRaisesRegex(ValueError, "runnable test plan evidence"):
+                stages.verify_command(args)
+
     def test_export_closure_subtracts_shared_paths(self):
         checks = {"model": {"outputs": [store("a", "model")]}}
         shared = [store("b", "dependency")]

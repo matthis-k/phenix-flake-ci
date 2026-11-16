@@ -197,3 +197,146 @@ nix flake check -L
 ```
 
 The repo CI workflow runs the Python conformance tests and Nix evaluation. The existing CI backends discover and build the test derivations; the library does not introduce a second test registry or job scheduler.
+
+## Runtime execution without recompilation
+
+`mkTest` now has an explicit execution role:
+
+- `execution = "build"` (default for direct `mkTest`): creates an ordinary Nix check derivation and runs the assertions during its build. Suitable for deterministic/cacheable checks.
+- `execution = "runtime"`: produces an executable Nix package containing the test specification and runner. The **package build does not execute the test**. Use it under `packages.${system}."test.<id>"` so the distributed CI workflow compiles its closure at the build barrier and executes it in a tester job.
+
+Prefer `mkSuite` for a single project test inventory. It defaults each declared test to runtime execution, while `execution = "build"` projects into `checks`. Optional `defaults` are shared across entries: `command`, `env`, `fixtures`, and `services` use shallow attribute merging, while `sockets` uses ordered deduplication. Individual test expectations remain independent:
+
+```nix
+let
+  suite = ciLib.mkSuite {
+    inherit pkgs;
+    tests = {
+      smoke = {
+        command.program = lib.getExe packages.cli;
+        command.args = [ "status" ];
+        expect.stdout.contains = "ready";
+      };
+      format = {
+        execution = "build";
+        command.program = lib.getExe packages.formatCheck;
+      };
+    };
+  };
+in {
+  packages.${system} = suite.packages; # "test.smoke"
+  checks.${system} = suite.checks;     # format
+}
+```
+
+The existing `test.*` package discovery, build barrier and closure transfer
+handle runtime packages. Executable paths are frozen into the plan and launched
+directly from the restored store. The runtime matrix uses deterministic
+batches to share the expensive closure import while recording independent
+per-case evidence, without evaluating the consumer flake again. The current workflow may choose to execute one package per job; test batching and capability routing are future extensions, not implicit in `mkSuite`.
+
+### Managed local processes and Unix sockets
+
+Simple process-level integration tests reuse the **same** command, expectation and step-reference engine as ordinary `mkTest` tests.
+
+```nix
+let
+  socket = ciLib.testRef.socket "rpc";
+  suite = ciLib.mkSuite {
+    inherit pkgs;
+    tests.handshake = {
+      sockets = [ "rpc" ];
+      services.server = {
+        command = {
+          program = lib.getExe server;
+          args = [ "--socket" socket ];
+        };
+        ready = { unixSocket = "rpc"; timeoutSeconds = 5; };
+      };
+      command = {
+        program = lib.getExe client;
+        args = [ "--socket" socket "ping" ];
+      };
+      expect.stdout.contains = "pong";
+    };
+  };
+in suite
+```
+
+The fixture reference is **tagged data**, not shell interpolation. The runner allocates a fresh temporary socket path, substitutes it into commands, launches the server without a shell, waits for the socket to be bound, runs the client, captures bounded server stdout/stderr tails, and terminates the server process group even when assertions fail. A readiness timeout or premature server exit fails the test and blocks client execution.
+
+Current readiness means *a Unix socket has been created*, not a successful application-level handshake. To verify a working protocol, the test command must connect and assert a response. Unix sockets are the first supported managed resource; TCP port leases, VM/container environments and fixture-sharing scopes are not yet implemented. Managed service environments accept only string values and no implicit secrets.
+
+To verify preparation and execution separately:
+
+```console
+nix build --no-link '.#packages.x86_64-linux."test.handshake"'
+nix run --offline --no-substitute --max-jobs 0 '.#packages.x86_64-linux."test.handshake"'
+```
+
+The second command is an optional local smoke check. CI uses direct
+execution from the resolved store path instead, so an offline tester needs
+no consumer flake, lock file or source checkout. A missing executable is a
+failure rather than a trigger to build it. Set `PHENIX_TEST_OUTPUT` to a writable directory to retain a passing result document. Failures emit machine-readable JSON to stdout and detailed diagnostics to stderr; CI's existing evidence gate still owns run-level acceptance.
+
+### Bounded command output and matrix capacity
+
+Step stdout and stderr are captured incrementally with a **1 MiB default cap
+per stream**. Exceeding either cap fails the test regardless of expected exit
+status; the command's complete process group is terminated. A specific command
+may set `maxOutputBytes = 4194304;` (4 MiB), with a supported maximum of
+64 MiB. This limit applies to captured test-step output. Managed service stdout
+and stderr are continuously drained; each on-disk log is capped at 1 MiB,
+while the last 4 KiB remain available in evidence regardless of earlier
+truncation. Evidence records total bytes and truncation separately. Excessive
+service logging does not by itself fail an otherwise successful test.
+
+One runtime `test.*` package currently becomes one GitHub Actions matrix job.
+Inventories exceeding GitHub's 256-job limit now fail at planning with a
+clear diagnostic, rather than failing later during matrix expansion.
+Future batching should preserve independent test evidence and reuse the
+existing runtime-package plan and final gate.
+
+File assertions that inspect UTF-8 text or JSON have a 16 MiB per-file
+inspection limit. Oversized files produce an explicit failed assertion rather
+than being read into unbounded memory. `size` and `exists` predicates remain
+available for arbitrarily large artifacts.
+
+## Configuring test batches
+
+The default planning budget produces up to 32 runtime jobs, targeting at
+least four cases per job. For a different isolation/parallelism tradeoff:
+
+```console
+python3 lib/flake-test-packages.py plan \
+  --system x86_64-linux --output ci-plan/test-packages.json \
+  --max-test-jobs 32 --tests-per-job 4
+```
+
+The generated GitHub matrix contains an ID and an explicit list of test
+package names for each job. The `batch` command imports the NAR once and
+executes every selected case in an individual workspace, writing independent
+`evidence.json` records. Failure of one test does not skip the other tests
+in its batch. The final verifier requires one passing report for every
+declared case.
+
+A shared runner is not a security isolation boundary. Use one test per job
+(`--tests-per-job 1 --max-test-jobs 256`) for small inventories requiring
+separate runners. Larger inventories need either batching or independent
+workflow partitioning; do not assume one GitHub job per test case.
+
+In generated paired workflows, use one typed resource budget for both
+trusted and untrusted backend plans:
+
+```nix
+ci.runtimeTests = {
+  maxJobs = 16;    # bounds GitHub job fan-out (1..256)
+  casesPerJob = 4; # target packing density, minimum one
+  timeoutSeconds = 300; # outer per-case timeout, 1..3600
+};
+```
+
+`mkFlakeCiWorkflows` validates the values and passes them to the selected
+native/staged backends. This affects only execution-job topology, not the
+consumer's test declarations, Nix compilation graph, trust decisions, or
+exact-head evidence checks.

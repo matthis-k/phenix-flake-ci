@@ -14,6 +14,22 @@ class RunnerTests(unittest.TestCase):
     def command(self, source, *args):
         return {"program": sys.executable, "args": ["-c", source, *args]}
 
+    def assert_descendant_stopped(self, pid):
+        import time
+
+        def running():
+            # A killed orphan can remain a zombie until PID 1 reaps it.
+            try:
+                return Path(f"/proc/{pid}/stat").read_text().split()[2] not in ("Z", "X")
+            except FileNotFoundError:
+                return False
+
+        for _ in range(40):
+            if not running():
+                break
+            time.sleep(0.025)
+        self.assertFalse(running(), "test runner leaked a live descendant")
+
     def test_multiple_assertions_single_execution(self):
         spec = {"command": self.command("from pathlib import Path; import json; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); print(json.dumps({'status':'ready','count':2,'items':['a','b']}))"),
                 "expect": {"exitCode": 0, "stdout": {"json": {"/status": "ready", "/count": {"gte": 2}, "/items/1": "b"}},
@@ -61,6 +77,91 @@ class RunnerTests(unittest.TestCase):
                                 "expect": {"exitCode": {"ne": 0}}})
         self.assertEqual(evidence["status"], "fail")
         self.assertIn("timed out", evidence["failures"][0]["reason"])
+
+    def test_timeout_kills_spawned_descendants(self):
+        import os
+        import signal
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "child.pid"
+            script = (
+                "import pathlib,subprocess,sys,time;"
+                "child=subprocess.Popen([sys.executable,'-c',"
+                "'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)']);"
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid));"
+                "time.sleep(30)"
+            )
+            try:
+                evidence = runner.test({
+                    "command": {**self.command(script, str(pidfile)), "timeoutSeconds": 0.75},
+                })
+                self.assertEqual(evidence["status"], "fail")
+                self.assertIn("timed out", evidence["failures"][0]["reason"])
+                self.assertTrue(pidfile.exists(), "descendant was not started before timeout")
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_output_cap_fails_even_when_exit_status_is_success(self):
+        evidence = runner.test({
+            "command": {**self.command("print('x' * 2048)"), "maxOutputBytes": 64},
+            "expect": {"exitCode": 0, "stdout": {"contains": "x"}},
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("stdout exceeded maxOutputBytes", evidence["failures"][0]["reason"])
+        self.assertTrue(evidence["steps"] == ["main"])
+
+    def test_output_cap_can_be_raised_per_command(self):
+        evidence = runner.test({
+            "command": {**self.command("print('x' * 2048)"), "maxOutputBytes": 4096},
+            "expect": {"stdout": {"contains": "x" * 2000}},
+        })
+        self.assertEqual(evidence["status"], "pass", evidence)
+
+    def test_stderr_cap_and_invalid_cap(self):
+        evidence = runner.test({
+            "command": {**self.command("import sys;sys.stderr.write('e' * 2048)"),
+                        "maxOutputBytes": 64},
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("stderr exceeded maxOutputBytes", evidence["failures"][0]["reason"])
+        for value in (False, 0, -1, 0.5, 64 * 1024 * 1024 + 1):
+            with self.subTest(value=value), self.assertRaises(runner.InvalidSpec):
+                runner.test({"command": {**self.command("print('x')"),
+                                         "maxOutputBytes": value}})
+
+    def test_exited_command_parent_does_not_keep_inherited_pipes_open(self):
+        import os
+        import signal
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "orphan.pid"
+            command = (
+                "import pathlib,subprocess,sys;"
+                "child=subprocess.Popen([sys.executable,'-c',"
+                "'import time;time.sleep(30)']);"
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid))"
+            )
+            start = time.monotonic()
+            try:
+                result = runner.test({
+                    "command": {**self.command(command, str(pidfile)),
+                                "timeoutSeconds": 3},
+                })
+                self.assertEqual(result["status"], "pass", result)
+                self.assertLess(time.monotonic() - start, 2.5)
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_command_args_are_not_shell_expanded(self):
         evidence = runner.test({"command": self.command("import sys; print(sys.argv[1])", "literal; $(echo danger)"),
@@ -159,6 +260,24 @@ class RunnerTests(unittest.TestCase):
             }}}})
         self.assertEqual(evidence["status"], "pass")
 
+    def test_large_sparse_file_rejects_content_inspection_without_loading_it(self):
+        limit = runner.FILE_CONTENT_LIMIT
+        script = (
+            "from pathlib import Path;"
+            f"p=Path('large.txt').open('wb');p.truncate({limit + 1});p.close()"
+        )
+        evidence = runner.test({
+            "command": self.command(script),
+            "expect": {"files": {"large.txt": {
+                "exists": True,
+                "size": {"gt": limit},
+                "text": {"contains": "unreachable"},
+            }}},
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertEqual(len(evidence["failures"]), 1)
+        self.assertIn("content-inspection limit", evidence["failures"][0]["reason"])
+
     def test_file_mismatch_reports_multiple_failures(self):
         evidence = runner.test({"command": self.command("from pathlib import Path;Path('data').write_text('wrong')"),
             "expect": {"files": {"data": {
@@ -219,6 +338,278 @@ class RunnerTests(unittest.TestCase):
         diff = runner.render_diff(actual, "\\n".join(f"actual-{i}" for i in range(500)))
         self.assertIsNotNone(diff)
         self.assertLessEqual(len(diff.splitlines()), 81)
+
+
+    def test_managed_unix_socket_service_and_client(self):
+        reference = {"ref": {"fixture": "rpc", "field": "path"}}
+        server = (
+            "import socket,sys; "
+            "s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(5); "
+            "\nwhile True:\n c,_=s.accept(); data=c.recv(1024); c.sendall(b'pong' if data == b'ping' else b'bad'); c.close()"
+        )
+        client = (
+            "import socket,sys; s=socket.socket(socket.AF_UNIX); "
+            "s.connect(sys.argv[1]); s.sendall(b'ping'); print(s.recv(1024).decode())"
+        )
+        spec = {
+            "name": "rpc-interoperability",
+            "sockets": ["rpc"],
+            "services": {"server": {
+                "command": self.command(server, reference),
+                "ready": {"unixSocket": "rpc", "timeoutSeconds": 2},
+            }},
+            "steps": [{"id": "ping", "command": self.command(client, reference),
+                       "expect": {"stdout": {"contains": "pong"}}}],
+        }
+        evidence = runner.test(spec)
+        self.assertEqual(evidence["status"], "pass", evidence)
+        self.assertEqual(evidence["steps"], ["ping"])
+        self.assertIn("server", evidence["services"])
+
+    def test_ambiguous_service_readiness_rejected_before_startup(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-service-start"
+            command = self.command(
+                f"from pathlib import Path;Path({str(marker)!r}).touch()")
+            with self.assertRaisesRegex(runner.InvalidSpec, "already owned by service first"):
+                runner.test({
+                    "sockets": ["rpc"],
+                    "services": {
+                        "first": {"command": command, "ready": {"unixSocket": "rpc"}},
+                        "second": {"command": command, "ready": {"unixSocket": "rpc"}},
+                    },
+                    "command": self.command("print('never')"),
+                })
+            self.assertFalse(marker.exists())
+
+    def test_noisy_service_logs_are_bounded_and_retain_recent_tail(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            from test_services import SERVICE_LOG_FILE_LIMIT, ServiceGroup
+
+            root = Path(directory)
+            reference = {"ref": {"fixture": "rpc", "field": "path"}}
+            # A pipe filled before socket bind must not block readiness.
+            # The tail must retain the last bytes despite the disk cap.
+            server = (
+                "import socket,sys,time;"
+                "sys.stdout.write('a' * (1024 * 1024 + 8192) + 'END-MARKER');"
+                "sys.stdout.flush();"
+                "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                "time.sleep(30)"
+            )
+            group = ServiceGroup(root, ["rpc"], {
+                "server": {
+                    "command": self.command(server, reference),
+                    "ready": {"unixSocket": "rpc", "timeoutSeconds": 5},
+                },
+            }, {}, lambda program, args: runner.materialize_refs(
+                [program, *args], {}, group.sockets))
+            with group:
+                pass
+            evidence = group.evidence()["server"]
+            self.assertGreater(evidence["stdoutBytes"], SERVICE_LOG_FILE_LIMIT)
+            self.assertTrue(evidence["stdoutTruncated"])
+            self.assertTrue(evidence["stdoutTail"].endswith("END-MARKER"))
+            self.assertLessEqual((root / "logs/server.stdout.log").stat().st_size,
+                                 SERVICE_LOG_FILE_LIMIT)
+            self.assertEqual((root / "logs/server.stderr.log").stat().st_size, 0)
+
+    def test_managed_service_readiness_timeout_is_failure(self):
+        reference = {"ref": {"fixture": "rpc", "field": "path"}}
+        evidence = runner.test({
+            "sockets": ["rpc"],
+            "services": {"slow": {
+                "command": self.command("import time; print('starting', flush=True);time.sleep(3)", reference),
+                "ready": {"unixSocket": "rpc", "timeoutSeconds": 0.08}}},
+            "command": self.command("print('must-not-run')"),
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("readiness timed out", evidence["failures"][0]["reason"])
+        self.assertIn("starting", evidence["services"]["slow"]["stdoutTail"])
+        self.assertEqual(evidence["steps"], [])
+
+    def test_managed_service_early_exit_is_failure(self):
+        evidence = runner.test({
+            "sockets": ["rpc"],
+            "services": {"crashed": {
+                "command": self.command("import sys;print('crash',flush=True);sys.exit(7)"),
+                "ready": {"unixSocket": "rpc", "timeoutSeconds": 1}}},
+            "command": self.command("print('must-not-run')"),
+        })
+        self.assertEqual(evidence["status"], "fail")
+        self.assertIn("exited before readiness", evidence["failures"][0]["reason"])
+        self.assertIn("crash", evidence["services"]["crashed"]["stdoutTail"])
+
+    def test_interrupted_service_startup_reaps_spawned_process(self):
+        import os
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            group = runner.ServiceGroup(
+                Path(directory), ["rpc"], {"server": {
+                    "command": self.command("import time;time.sleep(30)"),
+                    "ready": {"unixSocket": "rpc", "timeoutSeconds": 5},
+                }}, {}, lambda program, args: [program, *args])
+            with mock.patch.object(group, "_await_ready", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    group.__enter__()
+            self.assertEqual(len(group.processes), 1)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(group.processes[0][1].pid, 0)
+
+    def test_partial_service_startup_failure_cleans_ready_siblings(self):
+        import os
+        import signal
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "ready.pid"
+            first = {"ref": {"fixture": "first", "field": "path"}}
+            server = (
+                "import os,pathlib,socket,sys,time;"
+                "pathlib.Path(sys.argv[2]).write_text(str(os.getpid()));"
+                "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                "time.sleep(30)"
+            )
+            try:
+                evidence = runner.test({
+                    "sockets": ["first", "second"],
+                    "services": {
+                        "a_ready": {
+                            "command": self.command(server, first, str(pidfile)),
+                            "ready": {"unixSocket": "first", "timeoutSeconds": 2}},
+                        "z_crash": {
+                            "command": self.command("import sys;sys.exit(7)"),
+                            "ready": {"unixSocket": "second", "timeoutSeconds": 2}},
+                    },
+                    "command": self.command("print('must-not-run')"),
+                })
+                self.assertEqual(evidence["status"], "fail")
+                self.assertIn("exited before readiness", evidence["failures"][0]["reason"])
+                self.assertEqual(evidence["steps"], [])
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_malformed_assertions_cannot_launch_managed_services(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-start"
+            server = self.command(
+                f"from pathlib import Path;Path({str(marker)!r}).touch()")
+            invalid = [
+                {"stdout": {"typo": "x"}},
+                {"stderr": {"matches": "["}},
+                {"exitCode": {"invalidOperation": 0}},
+                {"files": {"../escape": {"exists": True}}},
+                {"files": {"artifact": {"text": {"matches": "["}}}},
+                {"files": {"artifact": {"exists": "true"}}},
+                {"files": {"artifact": {"size": {"unexpected": 2}}}},
+                {"stdout": {"json": {"bad-pointer": 3}}},
+            ]
+            for expectation in invalid:
+                with self.subTest(expectation=expectation):
+                    with self.assertRaises(runner.InvalidSpec):
+                        runner.test({
+                            "sockets": ["rpc"],
+                            "services": {"server": {
+                                "command": server,
+                                "ready": {"unixSocket": "rpc", "timeoutSeconds": 0.1}}},
+                            "command": self.command("print('must-not-run')"),
+                            "expect": expectation,
+                        })
+                    self.assertFalse(marker.exists())
+
+    def test_final_expectation_shape_is_validated_before_processes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-step"
+            with self.assertRaises(runner.InvalidSpec):
+                runner.test({
+                    "steps": [{"id": "first", "command": self.command(
+                        f"from pathlib import Path;Path({str(marker)!r}).touch()")}],
+                    "expect": {"stdout": {"contains": "not-allowed-at-suite-level"}},
+                })
+            self.assertFalse(marker.exists())
+
+    def test_unknown_fixture_ref_rejected_before_side_effects(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "unexpected-startup"
+            with self.assertRaises(runner.InvalidSpec):
+                runner.test({
+                    "sockets": ["rpc"],
+                    "services": {"server": {
+                        "command": self.command(
+                            f"from pathlib import Path;Path({str(marker)!r}).touch()"),
+                        "ready": {"unixSocket": "rpc"}}},
+                    "command": self.command("print('x')", {
+                        "ref": {"fixture": "unknown", "field": "path"}}),
+                })
+            self.assertFalse(marker.exists())
+
+    def test_managed_service_is_terminated_after_test(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "service.pid"
+            reference = {"ref": {"fixture": "rpc", "field": "path"}}
+            server = ("import socket,sys,os,pathlib;"
+                      "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                      "pathlib.Path(sys.argv[2]).write_text(str(os.getpid()));"
+                      "import time;time.sleep(30)")
+            result = runner.test({
+                "sockets": ["rpc"],
+                "services": {"server": {
+                    "command": self.command(server, reference, str(pidfile)),
+                    "ready": {"unixSocket": "rpc", "timeoutSeconds": 2}}},
+                "command": self.command("print('done')"),
+            })
+            self.assertEqual(result["status"], "pass", result)
+            pid = int(pidfile.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
+
+    def test_managed_service_kills_descendants_after_leader_exits(self):
+        import os
+        import signal
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "descendant.pid"
+            reference = {"ref": {"fixture": "rpc", "field": "path"}}
+            # The service leader exits after socket readiness. Its child
+            # remains in the same process group and ignores graceful shutdown.
+            server = (
+                "import pathlib,socket,subprocess,sys,time;"
+                "s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen(1);"
+                "child=subprocess.Popen([sys.executable,'-c',"
+                "'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)']);"
+                "pathlib.Path(sys.argv[2]).write_text(str(child.pid));"
+                "time.sleep(0.12)"
+            )
+            try:
+                result = runner.test({
+                    "sockets": ["rpc"],
+                    "services": {"server": {
+                        "command": self.command(server, reference, str(pidfile)),
+                        "ready": {"unixSocket": "rpc", "timeoutSeconds": 2}}},
+                    "command": self.command("import time;time.sleep(0.25)"),
+                })
+                self.assertEqual(result["status"], "pass", result)
+                self.assert_descendant_stopped(int(pidfile.read_text()))
+            finally:
+                if pidfile.exists():
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == "__main__":

@@ -31,8 +31,6 @@ class RemoteBuildersTest(unittest.TestCase):
                 "import json, os, sys\n"
                 "with open(os.environ['CHILD_RECORD'], 'a') as f:\n"
                 "    f.write(json.dumps([sys.argv, os.environ['NIX_CONFIG']]) + '\\n')\n")
-            packages = root / "flake-test-packages.py"
-            packages.write_text(recorder.read_text())
             record = root / "children.jsonl"
             args = [sys.executable, str(source), "build", "--machines", str(machines),
                     "--dag", str(recorder), "--plan", "checks.json", "--graph", "graph.json",
@@ -48,14 +46,14 @@ class RemoteBuildersTest(unittest.TestCase):
             children = [json.loads(line) for line in record.read_text().splitlines()]
             self.assertEqual([child[0] for child in children], [
                 [str(recorder), "build", "--plan", "checks.json", "--graph", "graph.json",
-                 "--output", "evidence.json"],
-                [str(packages), "build", "--plan", "tests.json", "--root", "roots"],
+                 "--output", "evidence.json", "--test-packages", "tests.json",
+                 "--test-root", "roots"],
             ])
             expected = (env["NIX_CONFIG"] + f"\nbuilders = @{machines}\nmax-jobs = 0\n"
                         "builders-use-substitutes = true\n")
-            self.assertEqual([child[1] for child in children], [expected, expected])
+            self.assertEqual([child[1] for child in children], [expected])
             self.assertEqual(json.loads((root / "timing.json").read_text())["workerCount"], 1)
-            packages.write_text("raise SystemExit(7)\n")
+            recorder.write_text("raise SystemExit(7)\n")
             result = subprocess.run(args, env=env, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("exit status 7", result.stderr)
@@ -151,12 +149,42 @@ class RemoteBuildersTest(unittest.TestCase):
             self.assertEqual(output.getvalue().count("remote Nix store denied"), 1)
             self.assertFalse(Path(args.machines).exists())
 
+    def test_only_remote_execution_jobs_can_mint_oidc_tokens(self):
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        self.assertIn("permissions:\n  contents: read\n\njobs:", workflow)
+        plan = workflow.split("  plan:\n", 1)[1].split("  worker:\n", 1)[0]
+        worker = workflow.split("  worker:\n", 1)[1].split("  coordinator:\n", 1)[0]
+        coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
+        tester = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        acceptance = workflow.split("  acceptance:\n", 1)[1]
+        for script in (worker, coordinator):
+            self.assertIn("permissions:\n      contents: read\n      id-token: write", script)
+            self.assertIn("tailscale/github-action@", script)
+        for script in (plan, tester, acceptance):
+            self.assertNotIn("id-token: write", script)
+
+    def test_builder_uses_pinned_plan_artifact_without_checkout(self):
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  worker:\n", 1)[0]
+        worker = workflow.split("  worker:\n", 1)[1].split("  coordinator:\n", 1)[0]
+        self.assertIn("cp .ci-tools/flake-ci/lib/nix-remote-workers.py ci-plan/remote-worker.py", plan)
+        self.assertIn("name: remote-nix-plan-", worker)
+        self.assertIn("path: ci-plan/", worker)
+        self.assertIn("ci-plan/remote-worker.py hostname", worker)
+        self.assertIn("ci-plan/remote-worker.py hold", worker)
+        self.assertNotIn("actions/checkout@", worker)
+        self.assertNotIn(".ci-tools/flake-ci/", worker)
+        self.assertIn("cachix/install-nix-action@", worker)
+        self.assertIn("tailscale/github-action@", worker)
+
     def test_reusable_workflow_uses_distinct_artifacts_for_each_pool_size(self):
         # Reusable calls run in the *same* GitHub workflow run. artifact v4
         # refuses duplicate names, including across sequential 2/4/8 calls.
         workflow = (Path(__file__).parent.parent / ".github/workflows/flake-nix-builders.yml").read_text()
         self.assertEqual(
-            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 4
+            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 5
         )
         self.assertEqual(
             workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}"), 2
@@ -175,7 +203,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn('artifact_namespace: { type: string, default: "" }', workflow)
         self.assertIn("inputs.cache_namespace", workflow)
         self.assertIn("inputs.artifact_namespace", workflow)
-        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 4)
+        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 5)
         self.assertEqual(workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}${{"), 2)
         coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
         self.assertIn("restore-prefixes-first-match:", coordinator)
@@ -196,10 +224,16 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("needs: [plan, coordinator]", test_stage)
         self.assertIn("needs.coordinator.result == 'success'", test_stage)
         self.assertIn("fromJSON(needs.plan.outputs.test_matrix)", test_stage)
-        self.assertIn("save: false", test_stage)
+        self.assertNotIn("cache-nix-action", test_stage)
+        self.assertNotIn("Restore compiled test packages", test_stage)
         self.assertNotIn("TS_AUTHKEY:", test_stage)
         self.assertNotIn("TS_OAUTH_CLIENT_ID:", test_stage)
-        self.assertIn("flake-test-packages.py run", test_stage)
+        self.assertIn("ci-plan/runtime-runner.py batch", test_stage)
+        self.assertIn("cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py", workflow)
+        self.assertNotIn("actions/checkout@", test_stage)
+        self.assertIn("toJSON(matrix.names)", test_stage)
+        self.assertIn("--expected-commit", test_stage)
+        self.assertNotIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", test_stage)
         self.assertIn("needs: [plan, worker, coordinator, test]", acceptance)
         self.assertIn("flake-test-packages.py verify", acceptance)
         self.assertIn("test \"$TESTS\" = success", acceptance)
