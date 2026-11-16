@@ -21,7 +21,8 @@ class RunnerTests(unittest.TestCase):
             # A killed orphan can remain a zombie until PID 1 reaps it.
             try:
                 return Path(f"/proc/{pid}/stat").read_text().split()[2] not in ("Z", "X")
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
+                # /proc can disappear between opening stat and reading it.
                 return False
 
         for _ in range(40):
