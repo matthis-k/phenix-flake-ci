@@ -79,6 +79,42 @@ class RemoteBuildersTest(unittest.TestCase):
                            "c": {"HostName": "other", "TailscaleIPs": []}}}
         self.assertEqual(remote.peers(status), {"fc-123-1-n2-w1": "100.77.3.8"})
 
+    def test_tailnet_peer_table_can_be_null_while_initializing(self):
+        self.assertEqual(remote.peers({"Peer": None}), {})
+        self.assertEqual(remote.peers({"Peer": []}), {})
+        self.assertEqual(remote.peers({}), {})
+        self.assertEqual(remote.peers(None), {})
+
+    def test_discovery_waits_for_peer_snapshot_after_successful_tailnet_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {
+                "count": 1, "system": "x86_64-linux", "slots": 2,
+                "run_id": 122, "attempt": 1, "timeout": 10,
+                "machines": str(Path(directory, "machines")),
+                "hosts": str(Path(directory, "hosts.json")),
+            })()
+            expected = remote.worker_name(122, 1, 1, 1)
+            replies = iter([
+                {"Peer": None},
+                {"Peer": {"only": {
+                    "HostName": expected, "TailscaleIPs": ["100.66.1.2"],
+                }}},
+            ])
+
+            def invoke(*cmd, **kwargs):
+                if cmd[:2] == ("tailscale", "status"):
+                    return type("Reply", (), {"stdout": json.dumps(next(replies))})()
+                self.assertEqual(cmd[:3], ("sudo", remote.LOCAL_NIX, "store"))
+                return type("Reply", (), {"stdout": ""})()
+
+            with mock.patch.object(remote, "invoke", side_effect=invoke), \
+                 mock.patch.object(remote, "ssh_config"), \
+                 mock.patch.object(remote.time, "sleep") as sleep:
+                remote.discover(args)
+            sleep.assert_called_once_with(4)
+            self.assertIn("ssh-ng://runner@100.66.1.2", Path(args.machines).read_text())
+            self.assertEqual(json.loads(Path(args.hosts).read_text()), {expected: "100.66.1.2"})
+
     def test_matrix_outputs_json_for_job_matrix(self):
         with redirect_stdout(io.StringIO()) as buf:
             remote.matrix(type("A", (), {"count": 4})())
