@@ -92,7 +92,7 @@ in
       dagCustom = flat (render ({ backend = "nix-dag"; } // custom));
       remoteCustom = flat (render (remote // custom));
     in
-    assert builtins.match ".*test_max_jobs: 12.*tests_per_job: 3.*" dagCustom != null;
+    assert builtins.match ".*test_max_jobs: 12.*tests_per_job: 3.*test_timeout_seconds: 300.*" dagCustom != null;
     assert builtins.match ".*test_max_jobs: 12.*tests_per_job: 3.*" remoteCustom != null;
     assert builtins.match ".*test_max_jobs: 32.*tests_per_job: 4.*" dagYaml != null;
     assert builtins.match ".*test_max_jobs:.*" matrixYaml == null;
@@ -101,6 +101,10 @@ in
     assert invalid (render { backend = "nix-dag"; runtimeTests.casesPerJob = -1; });
     assert invalid (render { backend = "nix-dag"; runtimeTests.casesPerJob = "4"; });
     assert invalid (render { backend = "nix-dag"; runtimeTests.unknown = 3; });
+    assert invalid (render { backend = "nix-dag"; runtimeTests.timeoutSeconds = 0; });
+    assert invalid (render { backend = "nix-dag"; runtimeTests.timeoutSeconds = 3601; });
+    assert builtins.match ".*test_timeout_seconds: 60.*"
+      (flat (render { backend = "nix-dag"; runtimeTests.timeoutSeconds = 60; })) != null;
     true;
 
   authkeyUsesOnlyTheKeyButPreservesCalledWorkflowPermissions =

@@ -23,6 +23,7 @@ let
   runtimeTests = ci.runtimeTests or { };
   maxTestJobs = runtimeTests.maxJobs or 32;
   testsPerJob = runtimeTests.casesPerJob or 4;
+  testTimeoutSeconds = runtimeTests.timeoutSeconds or 300;
   transport = remote.transport or "tailscale";
   workers = remote.workers or 4;
   slotsPerWorker = remote.slotsPerWorker or 2;
@@ -90,12 +91,15 @@ let
   valid =
     if !isAttrs ci || !keysWithin ci [ "backend" "remote" "runtimeTests" ] then
       fail "ci must contain only backend, remote and runtimeTests"
-    else if !isAttrs runtimeTests || !keysWithin runtimeTests [ "maxJobs" "casesPerJob" ] then
-      fail "runtimeTests accepts only maxJobs and casesPerJob"
+    else if !isAttrs runtimeTests || !keysWithin runtimeTests [ "maxJobs" "casesPerJob" "timeoutSeconds" ] then
+      fail "runtimeTests accepts only maxJobs, casesPerJob and timeoutSeconds"
     else if !builtins.isInt maxTestJobs || maxTestJobs < 1 || maxTestJobs > 256 then
       fail "runtimeTests.maxJobs must be between 1 and 256"
     else if !builtins.isInt testsPerJob || testsPerJob < 1 then
       fail "runtimeTests.casesPerJob must be positive"
+    else if !builtins.isInt testTimeoutSeconds
+         || testTimeoutSeconds < 1 || testTimeoutSeconds > 3600 then
+      fail "runtimeTests.timeoutSeconds must be 1..3600"
     else if !builtins.isString backend || !(builtins.elem backend [ "matrix" "nix-dag" "nix-remote" ]) then
       fail "backend must be matrix, nix-dag or nix-remote"
     else if !isAttrs remote || !keysWithin remote [ "transport" "workers" "slotsPerWorker" "credentials" ] then
@@ -170,6 +174,7 @@ let
     ++ (if backend == "matrix" then [ ] else [
       "      test_max_jobs: ${toString maxTestJobs}"
       "      tests_per_job: ${toString testsPerJob}"
+      "      test_timeout_seconds: ${toString testTimeoutSeconds}"
     ])
     ++ (if remoteSelected then [
       "      worker_count: ${toString workers}"
