@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   plan:
@@ -104,6 +103,9 @@ jobs:
     name: Nix builder ${{ matrix.index }}
     needs: plan
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -146,6 +148,9 @@ jobs:
     name: Nix DAG scheduler / ${{ inputs.worker_count }} builders
     needs: plan
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
