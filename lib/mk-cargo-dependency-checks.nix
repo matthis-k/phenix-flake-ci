@@ -28,12 +28,13 @@ let
     && builtins.all (item: builtins.isString item && item != "") argv;
   validatedGroups = builtins.mapAttrs (name: spec:
     if !validName name || !builtins.isAttrs spec
-       || builtins.any (field: !(builtins.elem field [ "packages" "profile" "args" ]))
+       || builtins.any (field: !(builtins.elem field [ "packages" "profile" "args" "src" "postUnpack" ]))
          (builtins.attrNames spec)
        || !validNames (spec.packages or null)
        || !validName (spec.profile or "default")
        || !(builtins.hasAttr (spec.profile or "default") profiles)
        || !validArgv (spec.args or [ ])
+       || !(builtins.isString (spec.postUnpack or ""))
     then fail "invalid packages, profile, or extra arguments in test group ${name}"
     else spec // { profile = spec.profile or "default"; args = spec.args or [ ]; }
   ) groups;
@@ -67,6 +68,11 @@ let
   checks = builtins.mapAttrs (name: spec:
     craneLib.cargoTest (common // {
       pname = "ci-test-${name}";
+      # A group can provide a narrowed workspace source and manifest rewrite.
+      # This preserves Nix's incremental rebuild granularity: changing an
+      # unrelated crate must not invalidate every independent test check.
+      src = spec.src or src;
+      postUnpack = spec.postUnpack or "";
       cargoArtifacts = deps.${spec.profile};
       cargoExtraArgs = lib.escapeShellArgs (
         [ "--locked" ]
