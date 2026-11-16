@@ -177,10 +177,10 @@ Runtime test jobs must not inject `GITHUB_TOKEN` into Nix's
 `access-tokens` setting. The install action can add that token by default,
 so both backends explicitly configure an empty `access-tokens` value on
 test-only jobs, and neither passes the token as an installer input. Test jobs
-retain read-only `contents` permissions, check out only the pinned CI library,
-and pass GitHub's exact source SHA as the manifest authority. The consumer
-repository is not checked out on runtime tester jobs. This reduces exposed
-authority but does not
+have no repository checkout at all: the plan artifact carries a copy of the
+pinned library's execution script beside the manifest, and GitHub's exact
+source SHA supplies manifest authority. They retain read-only `contents`
+permissions. This reduces exposed authority but does not
 isolate arbitrary test executables from the host or guarantee network
 confinement. Higher-trust secrets must stay out of test jobs.
 

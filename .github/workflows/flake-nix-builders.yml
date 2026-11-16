@@ -89,6 +89,8 @@ jobs:
             --system "$(jq -er .system ci-plan/config.json)" \
             --output ci-plan/test-packages.json \
             --max-test-jobs "$MAX_TEST_JOBS" --tests-per-job "$TESTS_PER_JOB"
+          # Store the exact pinned runner beside the immutable test manifest.
+          cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
@@ -251,12 +253,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          repository: matthis-k/phenix-flake-ci
-          ref: ${{ inputs.library_ref }}
-          path: .ci-tools/flake-ci
-          persist-credentials: false
       - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
         with:
           # Never persist an API token into Nix configuration on runners
@@ -283,7 +279,7 @@ jobs:
           BATCH_NAMES: ${{ toJSON(matrix.names) }}
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py batch \
+          python3 ci-plan/runtime-runner.py batch \
             --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
             --expected-commit "$EXPECTED_COMMIT" \
             --closure ci-test-closure/closure.nar \
