@@ -74,47 +74,61 @@ def graph_summary(plan, raw):
     if not set(plan["checks"].values()) <= parents.keys():
         raise ValueError("Nix graph is missing declared check derivations")
 
-    visiting, memo = set(), {}
-    def ancestors(node):
-        if node in visiting:
-            raise ValueError("cyclic Nix derivation graph")
-        if node in memo:
-            return memo[node]
-        visiting.add(node)
-        found = set(parents[node])
-        for dep in parents[node]:
-            found.update(ancestors(dep))
-        visiting.remove(node)
-        memo[node] = frozenset(found)
-        return memo[node]
+    # Traverse Nix's derivation graph in dependency-first order. The old
+    # recursive ancestor-set expansion materialized O(V^2) paths for long
+    # chains and failed at Python's recursion limit for deep Nix graphs.
+    # Instead, retain only a bitset of reachable *named check* identities per
+    # derivation. Nix still owns all scheduling; these bits are evidence only.
+    from collections import deque
 
     checks = plan["checks"]
-    deps = {
-        name: sorted(
-            other for other, drv in checks.items()
-            if other != name and drv in ancestors(checks[name])
-        )
-        for name in sorted(checks)
-    }
-    # Checks with identical drv paths have the same realized build but remain
-    # independent named evidence entries. They are not dependency edges.
+    names = sorted(checks)
+    bits = {name: 1 << index for index, name in enumerate(names)}
+    checks_at_drv = {}
+    named_bits = {}
+    for name in names:
+        drv = checks[name]
+        checks_at_drv.setdefault(drv, []).append(name)
+        named_bits[drv] = named_bits.get(drv, 0) | bits[name]
+
+    consumers = {drv: [] for drv in parents}
+    pending = {drv: len(dependencies) for drv, dependencies in parents.items()}
+    for drv, dependencies in parents.items():
+        for dependency in dependencies:
+            consumers[dependency].append(drv)
+
+    ready = deque(sorted(drv for drv, count in pending.items() if count == 0))
+    reachable = {}
+    deps = {}
     waves = {}
-    visiting_checks = set()
-    def wave(name):
-        if name in waves:
-            return waves[name]
-        if name in visiting_checks:
-            raise ValueError("cyclic check dependency graph")
-        visiting_checks.add(name)
-        value = max((wave(dep) + 1 for dep in deps[name]), default=0)
-        visiting_checks.remove(name)
-        waves[name] = value
-        return value
-    for name in sorted(checks):
-        wave(name)
+    while ready:
+        drv = ready.popleft()
+        # Dependencies are already finalized, so no transitive path sets are
+        # required. A shared dependency's named checks are propagated once.
+        inherited = 0
+        for dependency in parents[drv]:
+            inherited |= reachable[dependency]
+        if drv in checks_at_drv:
+            upstream = [name for name in names if inherited & bits[name]]
+            rank = max((waves[name] + 1 for name in upstream), default=0)
+            # Two named checks can refer to one derivation; neither depends on
+            # the other, yet both inherit the same actual upstream checks.
+            for name in checks_at_drv[drv]:
+                deps[name] = upstream
+                waves[name] = rank
+        reachable[drv] = inherited | named_bits.get(drv, 0)
+        for consumer in consumers[drv]:
+            pending[consumer] -= 1
+            if pending[consumer] == 0:
+                ready.append(consumer)
+
+    # Check the entire recursive Nix derivation graph, including components
+    # not reachable through a named check. No silent partial graph acceptance.
+    if len(reachable) != len(parents):
+        raise ValueError("cyclic Nix derivation graph")
     tiers = [
-        sorted(name for name in checks if waves[name] == w)
-        for w in range(max(waves.values()) + 1)
+        sorted(name for name in names if waves[name] == rank)
+        for rank in range(max(waves.values()) + 1)
     ]
     return {
         "schemaVersion": SCHEMA,
