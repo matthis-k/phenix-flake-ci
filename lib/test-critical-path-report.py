@@ -150,5 +150,41 @@ class CriticalPathReportTests(unittest.TestCase):
                          ["run_conclusion"], "cancelled")
 
 
+    def test_observed_coordinated_consumer_timing_not_a_matrix(self):
+        # Intervals from successful Phenix AI run 43857321453, 2026-11-16.
+        # This is a regression example, not a hard-coded workload requirement.
+        run = {
+            "id": 43857321453, "head_sha": HEAD, "status": "completed",
+            "conclusion": "success", "run_started_at": iso(0),
+            "updated_at": iso(151),
+        }
+        names_intervals = [
+            ("Plan", 13, 39),
+            ("Coordinator", 41, 124),
+            ("Builder 1", 41, 111),
+            ("Builder 2", 42, 113),
+            ("Builder 3", 41, 113),
+            ("Builder 4", 42, 113),
+            ("Runtime tests", 126, 140),
+            ("Shipping gate", 142, 151),
+        ]
+        response = {
+            "total_count": len(names_intervals),
+            "jobs": [{
+                "id": i, "name": name, "status": "completed",
+                "conclusion": "success", "started_at": iso(start),
+                "completed_at": iso(end),
+            } for i, (name, start, end) in enumerate(names_intervals, 1)],
+        }
+        metrics = subject.report(run, response, HEAD)
+        self.assertEqual(metrics["workflow_wall_seconds"], 151)
+        self.assertEqual(metrics["runner_minutes"], 6.93)
+        self.assertEqual(metrics["initial_idle_seconds"], 13)
+        self.assertEqual(metrics["job_span_seconds"], 138)
+        self.assertEqual(metrics["last_finished_job"], "Shipping gate")
+        self.assertNotIn("tail_shard", metrics)
+        self.assertEqual(len(metrics["jobs"]), 8)
+
+
 if __name__ == "__main__":
     unittest.main()
