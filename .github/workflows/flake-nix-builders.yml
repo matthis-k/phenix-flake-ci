@@ -28,6 +28,7 @@ jobs:
     outputs:
       workers: ${{ steps.pool.outputs.workers }}
       cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+      cache_family: ${{ steps.plan.outputs.cache_family }}
       test_matrix: ${{ steps.runnable.outputs.tests }}
       test_count: ${{ steps.runnable.outputs.test_count }}
     steps:
@@ -181,6 +182,9 @@ jobs:
           primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
+            # Only the default namespace restores archives across lockfile changes;
+            # explicitly named benchmark caches remain isolated.
+            ${{ inputs.cache_namespace == '' && format('remote-{0}-', needs.plan.outputs.cache_family) || 'remote-cache-family-disabled-' }}
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Name coordinator uniquely for this invocation
         id: node
