@@ -53,6 +53,8 @@ class CriticalPathReportTests(unittest.TestCase):
         self.assertEqual(result["last_finished_job"],
                          "candidate / Flake matrix evidence aggregate")
         self.assertEqual(result["initial_idle_seconds"], 10)
+        self.assertEqual(result["job_idle_gap_seconds"], 7)
+        self.assertEqual(result["peak_running_jobs"], 2)
 
     def test_head_mismatch_and_incomplete_pages_fail_closed(self):
         run, jobs = sample()
@@ -181,6 +183,8 @@ class CriticalPathReportTests(unittest.TestCase):
         self.assertEqual(metrics["runner_minutes"], 6.93)
         self.assertEqual(metrics["initial_idle_seconds"], 13)
         self.assertEqual(metrics["job_span_seconds"], 138)
+        self.assertEqual(metrics["job_idle_gap_seconds"], 6)
+        self.assertEqual(metrics["peak_running_jobs"], 5)
         self.assertEqual(metrics["last_finished_job"], "Shipping gate")
         self.assertNotIn("tail_shard", metrics)
         self.assertEqual(len(metrics["jobs"]), 8)
