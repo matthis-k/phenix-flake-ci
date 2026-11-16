@@ -371,7 +371,8 @@ def prepare_execution(plan, names, args):
             raise ValueError("--closure is required without --local")
         verify_head(plan, expected_commit)
         import_closure(archive)
-    verify_outputs(plan, names)
+    if names:
+        verify_outputs(plan, names)
 
 
 def run_command(args):
