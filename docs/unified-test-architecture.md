@@ -293,3 +293,12 @@ those four redundant repository checkouts are removed. The same pinned script
 and verified artifact handoff already serve runtime tester jobs. This does
 not alter Nix scheduling, Tailscale admission, worker privileges or output
 verification; its benefit is simpler provisioning and reduced setup I/O.
+
+## OIDC permission scope
+
+Only the two jobs that actually join Tailscale—remote builders and the Nix
+coordinator—request `id-token: write`. Planning, isolated runtime testing
+and final evidence verification retain `contents: read` and cannot request
+an OIDC token. GitHub's job-scoped permissions provide this boundary directly,
+without a separate credential broker. Worker jobs still execute only on the
+trusted workflow, never the untrusted PR fallback.
