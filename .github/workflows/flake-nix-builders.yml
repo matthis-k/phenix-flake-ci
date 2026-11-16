@@ -153,6 +153,8 @@ jobs:
       contents: read
       id-token: write
     timeout-minutes: 45
+    outputs:
+      runtime_ready: ${{ steps.runtime_ready.outputs.ready }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -209,22 +211,44 @@ jobs:
             --count "$COUNT" --slots "$SLOTS" --timeout 300 \
             --machines ci-plan/machines --hosts ci-plan/hosts.json
       - name: Native Nix scheduler executes all exact-head checks
+        id: build
         run: |
           python3 .ci-tools/flake-ci/lib/nix-remote-workers.py build \
             --machines ci-plan/machines --dag .ci-tools/flake-ci/lib/flake-check-dag.py \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json --timing ci-result/timing.json \
             --test-packages ci-plan/test-packages.json --test-root ci-result/test-package-roots
-      - name: Export runnable test runtime closures
-        if: needs.plan.outputs.test_count != '0'
+      - name: Probe and export independent ready runtime artifacts
+        id: runtime_ready
+        if: ${{ always() && steps.build.outcome != 'skipped' && needs.plan.outputs.test_count != '0' }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
         run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py export \
-            --plan ci-plan/test-packages.json --output ci-test-closure/closure.nar
+          set -euo pipefail
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py probe \
+            --plan ci-plan/test-packages.json --output ci-test-closure/available.json
+          ready_count="$(jq -er '.available | length' ci-test-closure/available.json)"
+          # A green Nix build must supply every declared runtime package.
+          # A failed one may still supply a useful, exact-head subset.
+          if [[ "$BUILD_OUTCOME" == success && "$ready_count" -ne "$TEST_COUNT" ]]; then
+            echo "::error::Successful build omitted runnable test packages"
+            exit 1
+          fi
+          if [[ "$ready_count" -gt 0 ]]; then
+            python3 .ci-tools/flake-ci/lib/flake-test-packages.py export \
+              --plan ci-plan/test-packages.json \
+              --available ci-test-closure/available.json \
+              --output ci-test-closure/closure.nar
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: needs.plan.outputs.test_count != '0'
+        if: ${{ always() && steps.runtime_ready.outputs.ready == 'true' }}
         with:
           name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
-          path: ci-test-closure/closure.nar
+          path: ci-test-closure/
           if-no-files-found: error
           compression-level: 1
       - name: Verify complete DAG shipping evidence
@@ -255,7 +279,9 @@ jobs:
   test:
     name: Runtime test batch ${{ matrix.id }}
     needs: [plan, coordinator]
-    if: needs.coordinator.result == 'success' && needs.plan.outputs.test_count != '0'
+    # Test independently realized packages even when unrelated checks fail.
+    # The final acceptance job still requires coordinator success.
+    if: ${{ always() && needs.plan.result == 'success' && needs.coordinator.outputs.runtime_ready == 'true' && needs.plan.outputs.test_count != '0' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -287,6 +313,7 @@ jobs:
             --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
             --expected-commit "$EXPECTED_COMMIT" --timeout-seconds "$CASE_TIMEOUT" \
             --closure ci-test-closure/closure.nar \
+            --available ci-test-closure/available.json \
             --results "ci-result/"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
