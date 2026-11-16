@@ -71,22 +71,44 @@ def run(args):
     if names:
         build_args.extend(["--test-packages", tests_path,
                            "--test-root", directory / "test-package-roots"])
-    command("flake-check-dag.py", *build_args)
-    command("flake-check-dag.py", "verify", "--plan", plan,
-            "--graph", graph, "--evidence", build)
+    build_failed = False
+    try:
+        command("flake-check-dag.py", *build_args)
+    except subprocess.CalledProcessError:
+        # Nix --keep-going has completed every independent build root.
+        # Preserve successful runtime work without pretending the DAG passed.
+        build_failed = True
+        print("Build graph failed; probing independent runtime artifacts",
+              file=sys.stderr)
+    if not build_failed:
+        command("flake-check-dag.py", "verify", "--plan", plan,
+                "--graph", graph, "--evidence", build)
 
+    runtime_failed = False
     if names:
         results = directory / "runtime-results"
-        command("flake-test-packages.py", "batch",
-                "--local", "--plan", tests_path,
-                "--names-json", json.dumps(names),
-                "--timeout-seconds", args.timeout_seconds,
-                "--results", results)
-        command("flake-test-packages.py", "verify",
-                "--plan", tests_path, "--results", results)
+        available = directory / "runtime-available.json"
+        command("flake-test-packages.py", "probe",
+                "--plan", tests_path, "--output", available)
+        try:
+            command("flake-test-packages.py", "batch",
+                    "--local", "--plan", tests_path,
+                    "--available", available,
+                    "--names-json", json.dumps(names),
+                    "--timeout-seconds", args.timeout_seconds,
+                    "--results", results)
+        except subprocess.CalledProcessError:
+            runtime_failed = True
+        try:
+            command("flake-test-packages.py", "verify",
+                    "--plan", tests_path, "--results", results)
+        except subprocess.CalledProcessError:
+            runtime_failed = True
 
-    print(f"PASS: local CI verified all checks and {len(names)} runtime tests")
     print(f"Evidence: {directory}")
+    if build_failed or runtime_failed:
+        raise ValueError("CI failed: incomplete build or runtime test evidence")
+    print(f"PASS: local CI verified all checks and {len(names)} runtime tests")
 
 
 def main():
