@@ -277,7 +277,7 @@ jobs:
           name: nix-dag-test-closure
           path: dag-test-closure/closure.nar
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

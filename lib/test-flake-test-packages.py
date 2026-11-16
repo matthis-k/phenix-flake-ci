@@ -73,6 +73,8 @@ class TestPackageTests(unittest.TestCase):
                         join.index("flake-dag-stages.py verify"))
         self.assertLess(join.index("flake-dag-stages.py verify"),
                         join.index("flake-test-packages.py export"))
+        self.assertIn("name: nix-dag-test-closure", join)
+        self.assertIn("compression-level: 1", join)
         self.assertIn("needs: [plan, join]", test)
         self.assertIn("--closure dag-test-closure/closure.nar", test)
         self.assertIn("ci-plan/runtime-runner.py batch", test)
@@ -100,6 +102,8 @@ class TestPackageTests(unittest.TestCase):
         self.assertLess(coordinator.index("--test-packages"), coordinator.index("flake-test-packages.py export"))
         self.assertLess(coordinator.index("flake-test-packages.py export"), coordinator.index("name: remote-test-closure-"))
         self.assertIn("if-no-files-found: error", coordinator)
+        self.assertIn("name: remote-test-closure-", coordinator)
+        self.assertIn("compression-level: 1", coordinator)
         self.assertIn("needs: [plan, coordinator]", runner)
         self.assertLess(runner.index("name: remote-test-closure-"), runner.index("ci-plan/runtime-runner.py batch"))
         self.assertIn("toJSON(matrix.names)", runner)

@@ -250,3 +250,13 @@ subprocess-lifecycle implementation. The typed policy
 `ci.runtimeTests.timeoutSeconds` allows 1–3600 seconds. Job-level
 timeouts remain independent, and process-group isolation does not
 constrain intentionally detached children as containers would.
+
+## Measured runtime-closure transfer optimization
+
+Both reusable CI backends upload the immutable NAR handoff with GitHub
+artifact compression level 1. The existing library fixture yielded
+219,038,166 bytes at level 0 versus 101,208,854 bytes at level 1, a 53.8%
+reduction. A real Phenix AI consumer pilot produced a 221 MB uncompressed
+closure before the backend change. Those are *transfer-size measurements*;
+they do not prove a particular overall CI speedup. The compression level is
+kept fixed and fast rather than becoming another public setting.

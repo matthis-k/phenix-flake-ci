@@ -218,7 +218,7 @@ jobs:
           name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-test-closure/closure.nar
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 1
       - name: Verify complete DAG shipping evidence
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
