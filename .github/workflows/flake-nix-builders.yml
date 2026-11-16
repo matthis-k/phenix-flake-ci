@@ -143,7 +143,7 @@ jobs:
           hostname: ${{ steps.node.outputs.hostname }}
           args: --ssh
       - name: Serve derivations until coordinator signals completion
-        run: python3 ci-plan/remote-worker.py hold --timeout 1800
+        run: python3 ci-plan/remote-worker.py hold --timeout 1800 --startup-timeout 360
 
   coordinator:
     name: Nix DAG scheduler / ${{ inputs.worker_count }} builders
