@@ -30,6 +30,12 @@ when most crates are unaffected. This is a correctness requirement for
 incremental work, not a cosmetic optimization. Only the dependency-only corpus
 uses the full workspace's manifests.
 
+The real `cargoTest` check leaves explicitly disable
+`doInstallCargoArtifacts`: they run tests but do not persist a redundant
+multi-gigabyte Cargo `target` archive into each Nix output. Only the
+`buildDepsOnly` derivations export a compiler artifact cache for reuse. The
+library's fixture checks that leaf outputs contain no `target.tar.zst`.
+
 The optional `ci-prebuild-cargo-deps-<profile>` package alias is ordinary Nix
 output, not a new scheduler queue.
 
