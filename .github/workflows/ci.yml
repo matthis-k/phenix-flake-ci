@@ -321,6 +321,43 @@ jobs:
             jq -e '.status == "pass"' "$results/runtime-results/$name/evidence.json" >/dev/null
           done
 
+      - name: Confirm runtime tests continue after an independent build failure
+        run: |
+          set -euo pipefail
+          (
+            cd tests/declarative-test-consumer
+            python3 - <<'PY'
+          from pathlib import Path
+          file = Path("flake.nix")
+          source = file.read_text()
+          anchor = '      checks.${system} = {'
+          assert source.count(anchor) == 1
+          source = source.replace(anchor, anchor + '''
+                intentionally-fails = pkgs.runCommand "fixture-intentional-failure" { } ''
+                  echo "intentional independent fixture failure" >&2
+                  exit 42
+                '';
+          ''')
+          file.write_text(source)
+          PY
+            # Nix may update the fixture's tracked lockfile during the
+            # first run; freeze every changed input into this second commit.
+            git add -A
+            git commit -qm 'add independent failing check'
+            if python3 ../../lib/flake-ci-local.py \
+              --config ci/flake-check-config.nix \
+              --output-dir "$RUNNER_TEMP/local-flake-ci-failure"; then
+              echo "CI incorrectly marked a failing DAG as green" >&2
+              exit 1
+            fi
+          )
+          results="$(find "$RUNNER_TEMP/local-flake-ci-failure" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$results"
+          test ! -e "$results/evidence.json"
+          for name in rpc rpc-repeat; do
+            jq -e '.status == "pass"' "$results/runtime-results/$name/evidence.json" >/dev/null
+          done
+
       - name: Evaluate flake
         run: nix flake check --no-build
 

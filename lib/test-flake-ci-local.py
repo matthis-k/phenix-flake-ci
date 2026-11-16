@@ -70,19 +70,52 @@ class LocalCITests(unittest.TestCase):
                 ("flake-test-packages.py", "plan"),
                 ("flake-check-dag.py", "build"),
                 ("flake-check-dag.py", "verify"),
+                ("flake-test-packages.py", "probe"),
                 ("flake-test-packages.py", "batch"),
                 ("flake-test-packages.py", "verify"),
             ])
             build = calls[3][1]
             self.assertIn("--test-packages", build)
             self.assertIn("--test-root", build)
-            batch = calls[5][1]
+            batch = calls[6][1]
             self.assertIn("--local", batch)
+            self.assertIn("--available", batch)
             self.assertNotIn("--closure", batch)
             self.assertNotIn("--expected-commit", batch)
             self.assertEqual(json.loads(batch[batch.index("--names-json") + 1]),
                              ["rpc", "rpc-repeat"])
             self.assertTrue(list(Path(directory).glob("run-*/config.json")))
+
+    def test_build_failure_still_runs_runtime_and_never_reports_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            def check_output(argv, **kwargs):
+                if argv[1:3] == ["rev-parse", "--show-toplevel"]:
+                    return str(Path.cwd())
+                if argv[1:3] == ["status", "--porcelain"]:
+                    return ""
+                if argv[:3] == ["nix", "eval", "--json"]:
+                    return '{"schemaVersion":1,"system":"x86_64-linux"}'
+                raise AssertionError(argv)
+
+            def run(script, *args):
+                args = list(map(str, args))
+                calls.append((script, args[0]))
+                if script == "flake-test-packages.py" and args[0] == "plan":
+                    Path(args[args.index("--output") + 1]).write_text(
+                        json.dumps({"tests": {"rpc": {}}}))
+                if script == "flake-check-dag.py" and args[0] == "build":
+                    raise subprocess.CalledProcessError(100, ["nix", "build"])
+
+            with mock.patch.object(local.subprocess, "check_output",
+                                   side_effect=check_output), mock.patch.object(
+                                       local, "command", side_effect=run):
+                with self.assertRaisesRegex(ValueError, "incomplete build"):
+                    local.run(self.args(directory))
+            self.assertIn(("flake-test-packages.py", "probe"), calls)
+            self.assertIn(("flake-test-packages.py", "batch"), calls)
+            self.assertIn(("flake-test-packages.py", "verify"), calls)
+            self.assertNotIn(("flake-check-dag.py", "verify"), calls)
 
     def test_no_runtime_cases_skips_handoff(self):
         with tempfile.TemporaryDirectory() as directory:

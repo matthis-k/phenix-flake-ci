@@ -324,7 +324,18 @@ GitHub matrix runners use `fail-fast: false`. A failed matrix job can be shown
 as failed while independent matrix jobs continue. A **single** Nix coordinator
 job cannot finish red before its own Nix invocation completes. Adding an
 independent reporter job for earlier red status is not currently justified by
-its extra credentials/coordination. Runtime tests still require the successful
-all-build synchronization barrier; they are not misreported as completed if
-required prebuilt artifacts are unavailable. This is failure-tolerant build
-scheduling, not a guarantee that all test processes run after failed compilation.
+its extra credentials/coordination. Runtime handoff no longer requires **every** check to succeed on the
+trusted native-remote backend. After Nix finishes its best-effort build graph,
+the coordinator probes the exact-commit runtime output store paths. It exports
+only built, executable cases; those cases run on source-free, low-privilege
+tester jobs even when an unrelated check failed. Unbuilt cases receive explicit
+`blocked` evidence, never a fabricated pass. Test jobs still wait for the
+coordinator to finish, not necessarily succeed; a failed coordinator **always**
+makes the final acceptance gate fail. A missing runtime closure never triggers
+recompilation on a tester. The staged untrusted backend retains the existing
+all-build-success barrier until its matching handoff is implemented and tested.
+
+The local CLI uses the same ready-output probe and per-case evidence without
+a NAR export/import. It similarly continues after unrelated Nix failures and
+returns nonzero. Neither backend claims that tests downstream of an actual
+compilation failure can execute; they are explicitly blocked.
