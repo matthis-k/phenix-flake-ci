@@ -182,10 +182,10 @@ jobs:
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
           primary-key: remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}${{ github.sha }}
+          # Only the default namespace restores across lockfile changes;
+          # explicit benchmark cache namespaces remain isolated.
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-${{ inputs.cache_namespace && format('{0}-', inputs.cache_namespace) || '' }}
-            # Only the default namespace restores archives across lockfile changes;
-            # explicitly named benchmark caches remain isolated.
             ${{ inputs.cache_namespace == '' && format('remote-{0}-', needs.plan.outputs.cache_family) || 'remote-cache-family-disabled-' }}
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Name coordinator uniquely for this invocation
