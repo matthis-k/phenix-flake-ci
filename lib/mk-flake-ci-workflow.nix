@@ -160,7 +160,7 @@ let
     else
       true;
   eventLines =
-    (if pullRequest then [ "  pull_request:" ] else [ ])
+    (if pullRequest then [ "  pull_request:" "    types: [opened, reopened, synchronize, ready_for_review]" ] else [ ])
     ++ (if pushBranches != [ ] then
       [ "  push:" "    branches:" ]
       ++ map (branch: "      - ${builtins.toJSON branch}") pushBranches

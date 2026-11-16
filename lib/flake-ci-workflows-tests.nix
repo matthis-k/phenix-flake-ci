@@ -91,6 +91,7 @@ in
 
   prNeverReceivesRemoteAuthority =
     assert builtins.match ".*pull_request:.*" pr != null;
+    assert builtins.match ".*ready_for_review.*" pr != null;
     assert builtins.match ".*id-token: write.*" pr == null;
     assert builtins.match ".*TS_OAUTH_CLIENT_ID.*" pr == null;
     assert builtins.match ".*TS_AUTHKEY.*" pr == null;
