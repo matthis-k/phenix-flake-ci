@@ -9,11 +9,10 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       inherit (pkgs) lib;
-      group = member: {
-          packages = [ "cargo-deps-${member}" ];
-          # Real selected members overlay the complete dummy workspace.
-          # Original full member list and Cargo.lock remain unchanged.
-          src = lib.fileset.toSource {
+      group =
+        member:
+        let
+          filtered = lib.fileset.toSource {
             root = ./workspace;
             fileset = lib.fileset.unions [
               ./workspace/Cargo.toml
@@ -21,6 +20,28 @@
               (./workspace + "/${member}")
             ];
           };
+          # Adversarial case: overlay b supplies the *wrong* workspace root
+          # manifest and lockfile. The library must restore Crane's complete
+          # workspace identity before Cargo --locked starts.
+          narrowed = (pkgs.formats.toml { }).generate "Cargo.toml" {
+            workspace = {
+              members = [ member ];
+              resolver = "2";
+            };
+          };
+          adversarial = pkgs.runCommand "adversarial-cargo-group-${member}" { } ''
+            mkdir -p "$out"
+            cp -r --no-preserve=mode ${filtered}/. "$out/"
+            chmod -R u+w "$out"
+            cp ${narrowed} "$out/Cargo.toml"
+            printf '%s\\n' 'invalid package lockfile' > "$out/Cargo.lock"
+          '';
+        in
+        {
+          packages = [ "cargo-deps-${member}" ];
+          # Member a is the normal filtered case; b tests hostile root
+          # metadata. Neither may change unrelated member compilation.
+          src = if member == "b" then adversarial else filtered;
         };
       suite = phenix-flake-ci.lib.mkCargoDependencyChecks {
         inherit pkgs;
