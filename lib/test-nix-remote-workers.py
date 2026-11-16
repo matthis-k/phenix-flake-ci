@@ -212,7 +212,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("github.sha", coordinator)
         self.assertIn("gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}", coordinator)
 
-    def test_runnable_jobs_only_start_after_native_coordinator(self):
+    def test_runnable_jobs_start_after_ready_coordinator_outputs(self):
         workflow = (Path(__file__).parent.parent /
                     ".github/workflows/flake-nix-builders.yml").read_text()
         test_stage = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
@@ -222,7 +222,11 @@ class RemoteBuildersTest(unittest.TestCase):
                       coordinator)
         self.assertNotIn("flake-test-packages.py build", coordinator)
         self.assertIn("needs: [plan, coordinator]", test_stage)
-        self.assertIn("needs.coordinator.result == 'success'", test_stage)
+        self.assertIn("needs.coordinator.outputs.runtime_ready == 'true'", test_stage)
+        # Runtime may continue after unrelated check failures, but never after
+        # missing artifact handoff and never with a green final build gate.
+        self.assertNotIn("needs.coordinator.result == 'success'", test_stage)
+        self.assertIn("test \\"$COORDINATOR\\" = success", acceptance)
         self.assertIn("fromJSON(needs.plan.outputs.test_matrix)", test_stage)
         self.assertNotIn("cache-nix-action", test_stage)
         self.assertNotIn("Restore compiled test packages", test_stage)
