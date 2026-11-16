@@ -73,9 +73,32 @@ the entire check inventory. Each existing backend must produce complete,
 exact-head evidence. This wrapper does not schedule derivations or maintain
 a separate check registry.
 
-For local verification run `nix flake check`, or build the same checks via
-`nix build .#checks.x86_64-linux.<check-name>`. No GitHub or Tailscale
-connection is needed for local execution.
+For quick local verification run `nix flake check --keep-going`, or build one
+check via `nix build .#checks.x86_64-linux.<check-name>`.
+
+For **full local parity**, including prebuilt `packages.<system>.test.*` runtime
+cases and the exact-head evidence gate, run the same library revision used by
+the CI workflow from the **clean consumer repository root**:
+
+```sh
+python3 /path/to/phenix-flake-ci/lib/flake-ci-local.py \\
+  --config ci/flake-check-config.nix
+# Optional: --checks-only / --output-dir .ci-local / --timeout-seconds 300
+```
+
+This thin local adapter calls the existing plan, DAG, build and evidence
+scripts. It builds all checks and test packages in one native Nix graph,
+then directly verifies and executes already-built local test executables with
+`flake-test-packages.py batch --local`. No NAR export/import, redundant Cargo
+build or GitHub API is involved. Each invocation retains its own evidence in
+`.ci-local/run-*/`; individual runtime failures do not stop later cases.
+
+The local adapter rejects **dirty tracked files**: the current evidence
+protocol binds results to the Git commit and cannot honestly attest to a
+different working tree. Use plain `nix flake check --keep-going` for active,
+uncommitted development. Local execution uses the host's Nix store/builders;
+it does not reproduce multi-runner isolation, artifact transport, GitHub
+status updates or the independent security context of hosted runners.
 
 ## Remote-builder trust and configuration
 

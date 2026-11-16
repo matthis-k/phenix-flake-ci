@@ -294,20 +294,38 @@ def execute_case(plan, name, path, timeout_seconds=DEFAULT_CASE_TIMEOUT_SECONDS)
     print(f"PASS: runnable test package {name}")
 
 
+def prepare_execution(plan, names, args):
+    """Reuse the exact runtime checks locally without exporting/importing a NAR.
+
+    Artifact-only GitHub runners still require an imported closure and an
+    explicit source commit; local runners instead prove their real checkout.
+    """
+    local = getattr(args, "local", False)
+    archive = getattr(args, "closure", None)
+    expected_commit = getattr(args, "expected_commit", None)
+    if local:
+        if archive is not None or expected_commit is not None:
+            raise ValueError("--local cannot be combined with --closure or --expected-commit")
+        verify_head(plan)
+    else:
+        if archive is None:
+            raise ValueError("--closure is required without --local")
+        verify_head(plan, expected_commit)
+        import_closure(archive)
+    verify_outputs(plan, names)
+
+
 def run_command(args):
     plan = validate(load(args.plan))
-    verify_head(plan, getattr(args, "expected_commit", None))
     if args.name not in plan["tests"]:
         raise ValueError("test job not in exact-head package inventory")
-    import_closure(args.closure)
-    verify_outputs(plan, [args.name])
+    prepare_execution(plan, [args.name], args)
     execute_case(plan, args.name, args.output,
                  getattr(args, "timeout_seconds", DEFAULT_CASE_TIMEOUT_SECONDS))
 
 
 def batch_command(args):
     plan = validate(load(args.plan))
-    verify_head(plan, getattr(args, "expected_commit", None))
     try:
         names = json.loads(args.names_json)
     except (TypeError, ValueError) as error:
@@ -317,9 +335,8 @@ def batch_command(args):
                    for name in names)
             or len(set(names)) != len(names)):
         raise ValueError("test batch must contain unique planned package names")
-    # The closure is imported and checked ONCE, regardless of batch length.
-    import_closure(args.closure)
-    verify_outputs(plan, names)
+    # Artifact runners import once; local runners verify their existing store.
+    prepare_execution(plan, names, args)
     failures = []
     for name in names:
         try:
@@ -378,7 +395,9 @@ def main():
     c.add_argument("--plan", required=True)
     c.add_argument("--name", required=True)
     c.add_argument("--output", required=True)
-    c.add_argument("--closure", required=True)
+    c.add_argument("--closure")
+    c.add_argument("--local", action="store_true",
+                   help="Verify local Nix store outputs; no NAR import or supplied commit")
     c.add_argument("--expected-commit", help="Exact source SHA for an artifact-only runner")
     c.add_argument("--timeout-seconds", type=int, default=DEFAULT_CASE_TIMEOUT_SECONDS)
     c.set_defaults(func=run_command)
@@ -386,7 +405,9 @@ def main():
     batch.add_argument("--plan", required=True)
     batch.add_argument("--names-json", required=True)
     batch.add_argument("--results", required=True)
-    batch.add_argument("--closure", required=True)
+    batch.add_argument("--closure")
+    batch.add_argument("--local", action="store_true",
+                       help="Verify local Nix store outputs; no NAR import or supplied commit")
     batch.add_argument("--expected-commit")
     batch.add_argument("--timeout-seconds", type=int, default=DEFAULT_CASE_TIMEOUT_SECONDS)
     batch.set_defaults(func=batch_command)
