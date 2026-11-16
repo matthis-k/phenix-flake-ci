@@ -23,6 +23,13 @@ tracking, or dependency scheduler. See https://crane.dev/API.html.
 source workspace, its lockfile, and named test groups. Each profile creates
 one dummy-source dependency derivation; each group becomes a separate real
 `cargoTest` check depending on its profile's immutable dependency artifacts.
+Each group may set `src` and `postUnpack` to supply a **source-filtered
+workspace** and its matching reduced Cargo workspace manifest. Without that
+scoping, a full-workspace source change invalidates every test derivation even
+when most crates are unaffected. This is a correctness requirement for
+incremental work, not a cosmetic optimization. Only the dependency-only corpus
+uses the full workspace's manifests.
+
 The optional `ci-prebuild-cargo-deps-<profile>` package alias is ordinary Nix
 output, not a new scheduler queue.
 
@@ -60,13 +67,17 @@ the shared test compilation until verified separately.
 
 ## Required test evidence
 
-The two-crate fixture in `tests/cargo-deps-consumer` builds both groups,
-modifies one crate's Rust source to contain a genuine compile error, then
-verifies three conditions:
+The two-crate fixture in `tests/cargo-deps-consumer` uses two separate,
+source-filtered group derivations with a real shared `once_cell` registry crate.
+It builds both groups, modifies only one crate's Rust source to contain a
+genuine compile error, then verifies four conditions:
 
-1. The dependency derivation identity is stable despite a source-only edit.
-2. Nix `--keep-going` returns failure because one crate cannot compile.
-3. The sibling test check still builds from the local store with no substitute.
+1. The shared dependency derivation identity is unchanged.
+2. The unaffected test group's derivation identity is unchanged.
+3. The edited test group's derivation identity changes and Nix `--keep-going`
+   returns failure because its actual Rust source cannot compile.
+4. The unaffected group remains buildable from the local store with no
+   substitution or recompilation.
 
 That demonstrates source-level failure isolation and derivation-level sharing,
 not an end-to-end speedup. A real workspace benchmark must compare cold
