@@ -295,12 +295,16 @@ jobs:
           ' "$log" >/dev/null
 
       - name: Exercise full local CI on clean committed fixture
+        env:
+          LIBRARY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           (
             cd tests/declarative-test-consumer
-            # The fixture is a consumer, not the library's own flake. Give it
-            # its own exact Git identity without writing to the outer branch.
+            # The fixture becomes an independent Git root, so its parent
+            # path:../.. input would escape Nix's pure flake root.
+            # Point it at this run's exact tested library revision instead.
+            sed -i "s|path:../..|github:${GITHUB_REPOSITORY}/${LIBRARY_SHA}|" flake.nix
             git init -q
             git config user.name fixture-ci
             git config user.email fixture-ci@localhost
