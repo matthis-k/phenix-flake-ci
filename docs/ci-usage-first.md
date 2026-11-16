@@ -146,6 +146,16 @@ exports/imports, or absent planned outputs fail closed without compilation
 on test runners. The closure artifact is subject to GitHub artifact storage
 and transfer limits.
 
+## Independent Cargo groups with shared dependency compilation
+
+For larger Rust workspaces, the opt-in `mkCargoDependencyChecks` helper
+shares a compiled dependency corpus between independently failing test
+groups, while preserving the complete workspace lockfile. The public API,
+narrow source-scoping rules and tradeoffs are documented in
+[Shared Cargo dependency checks](cargo-dependency-checks.md). This is
+different from the single precompiled test-package helper below: grouped
+checks execute their Cargo tests inside independent Nix derivations.
+
 ## Optional Cargo test artifacts (language-specific adapter)
 
 The core CI scheduler remains language-agnostic. For a Rust workspace, the
