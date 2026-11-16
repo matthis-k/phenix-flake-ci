@@ -191,6 +191,9 @@ def plan_command(args):
             output.write("matrix=" + canonical(matrix) + "\n")
             output.write("digest=" + plan["digest"] + "\n")
             output.write("cache_prefix=" + plan["cachePrefix"] + "\n")
+            # Same architecture and cache policy, independent of lockfile digest.
+            # This is a restore-only prefix; writes remain exact-head keyed.
+            output.write("cache_family=" + plan["cachePrefix"].rsplit("-", 1)[0] + "\n")
     print(f"{len(plan['checks'])} Nix checks in {len(plan['shards'])} shards; {plan['digest']}")
 
 
