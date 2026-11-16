@@ -112,6 +112,9 @@ jobs:
       - name: Test generated native Nix DAG scheduler
         run: python3 lib/test-flake-check-dag.py -v
 
+      - name: Verify local and GitHub CI runtime execution parity
+        run: python3 lib/test-flake-ci-local.py -v
+
       - name: Test untrusted single-store Nix DAG workflow boundaries
         run: python3 lib/test-local-dag-workflow.py -v
 
