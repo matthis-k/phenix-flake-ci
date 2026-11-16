@@ -192,10 +192,69 @@ def build_command(args):
     print(f"Built {len(tests)} executable test packages through the native scheduler")
 
 
+def availability_for(plan, names):
+    """A successful Nix root is usable even if an unrelated root failed.
+
+    Try one Nix store query on the normal green path; on failure probe
+    individually to preserve all independent tests without rebuilding.
+    """
+    outputs = sorted({plan["tests"][name]["out"] for name in names})
+    if not outputs:
+        return []
+    try:
+        verify_outputs(plan, names)
+        present = set(outputs)
+    except (subprocess.CalledProcessError, ValueError):
+        present = set()
+        for output in outputs:
+            try:
+                actual = subprocess.check_output(
+                    ["nix", "path-info", "--offline", output], text=True).splitlines()
+                if actual == [output]:
+                    present.add(output)
+            except subprocess.CalledProcessError:
+                pass
+    return sorted(name for name in names
+                  if plan["tests"][name]["out"] in present
+                  and Path(plan["tests"][name]["exe"]).is_file()
+                  and os.access(plan["tests"][name]["exe"], os.X_OK))
+
+
+def availability_plan(plan, available):
+    return {"schemaVersion": SCHEMA, "commit": plan["commit"],
+            "digest": plan["digest"], "available": sorted(available)}
+
+
+def read_availability(plan, file):
+    record = load(file)
+    if not isinstance(record, dict) or set(record) != {
+            "schemaVersion", "commit", "digest", "available"}:
+        raise ValueError("invalid runtime availability evidence")
+    available = record["available"]
+    if (record["schemaVersion"] != SCHEMA or
+            record["commit"] != plan["commit"] or
+            record["digest"] != plan["digest"] or
+            not isinstance(available, list) or
+            any(not isinstance(n, str) or n not in plan["tests"] for n in available) or
+            available != sorted(set(available))):
+        raise ValueError("stale or invalid runtime availability evidence")
+    return set(available)
+
+
+def probe_command(args):
+    plan = validate(load(args.plan))
+    verify_head(plan)
+    ready = availability_for(plan, sorted(plan["tests"]))
+    save(args.output, availability_plan(plan, ready))
+    print(f"Runtime artifacts ready: {len(ready)}/{len(plan['tests'])}")
+
+
 def export_command(args):
     plan = validate(load(args.plan))
     verify_head(plan)
-    roots = sorted({entry["out"] for entry in plan["tests"].values()})
+    available = (read_availability(plan, args.available)
+                 if getattr(args, "available", None) else set(plan["tests"]))
+    roots = sorted({plan["tests"][name]["out"] for name in available})
     if not roots:
         return
     paths = subprocess.check_output(
@@ -324,6 +383,16 @@ def run_command(args):
                  getattr(args, "timeout_seconds", DEFAULT_CASE_TIMEOUT_SECONDS))
 
 
+def blocked_case(plan, name, path):
+    entry = plan["tests"][name]
+    save(path, {"schemaVersion": SCHEMA, "digest": plan["digest"],
+                "commit": plan["commit"], "name": name,
+                "drv": entry["drv"], "out": entry["out"], "exe": entry["exe"],
+                "status": "blocked", "reason": "required runtime output not built"})
+    print(f"BLOCKED: test package {name}: required runtime output not built",
+          file=sys.stderr)
+
+
 def batch_command(args):
     plan = validate(load(args.plan))
     try:
@@ -336,9 +405,17 @@ def batch_command(args):
             or len(set(names)) != len(names)):
         raise ValueError("test batch must contain unique planned package names")
     # Artifact runners import once; local runners verify their existing store.
-    prepare_execution(plan, names, args)
+    # A missing compiled package blocks only that package, never its siblings.
+    available = (read_availability(plan, args.available)
+                 if getattr(args, "available", None) else set(names))
+    runnable = [name for name in names if name in available]
+    prepare_execution(plan, runnable, args)
     failures = []
     for name in names:
+        if name not in available:
+            blocked_case(plan, name, Path(args.results) / name / "evidence.json")
+            failures.append(name)
+            continue
         try:
             execute_case(plan, name, Path(args.results) / name / "evidence.json",
                          getattr(args, "timeout_seconds", DEFAULT_CASE_TIMEOUT_SECONDS))
@@ -406,6 +483,7 @@ def main():
     batch.add_argument("--names-json", required=True)
     batch.add_argument("--results", required=True)
     batch.add_argument("--closure")
+    batch.add_argument("--available", help="Validated subset of built runtime packages")
     batch.add_argument("--local", action="store_true",
                        help="Verify local Nix store outputs; no NAR import or supplied commit")
     batch.add_argument("--expected-commit")
@@ -415,9 +493,14 @@ def main():
     d.add_argument("--plan", required=True)
     d.add_argument("--results", required=True)
     d.set_defaults(func=verify_command)
+    probe = subs.add_parser("probe")
+    probe.add_argument("--plan", required=True)
+    probe.add_argument("--output", required=True)
+    probe.set_defaults(func=probe_command)
     e = subs.add_parser("export")
     e.add_argument("--plan", required=True)
     e.add_argument("--output", required=True)
+    e.add_argument("--available", help="Validated built-artifact subset")
     e.set_defaults(func=export_command)
     args = parser.parse_args()
     try:
