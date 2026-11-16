@@ -230,9 +230,10 @@ in {
 ```
 
 The existing `test.*` package discovery, build barrier and closure transfer
-handle runtime packages. Test executable paths are resolved into the frozen
-manifest; test jobs run those executables directly from the imported store,
-without evaluating the consumer flake again. The current workflow may choose to execute one package per job; test batching and capability routing are future extensions, not implicit in `mkSuite`.
+handle runtime packages. Executable paths are frozen into the plan and launched
+directly from the restored store. The runtime matrix uses deterministic
+batches to share the expensive closure import while recording independent
+per-case evidence, without evaluating the consumer flake again. The current workflow may choose to execute one package per job; test batching and capability routing are future extensions, not implicit in `mkSuite`.
 
 ### Managed local processes and Unix sockets
 
@@ -300,3 +301,26 @@ File assertions that inspect UTF-8 text or JSON have a 16 MiB per-file
 inspection limit. Oversized files produce an explicit failed assertion rather
 than being read into unbounded memory. `size` and `exists` predicates remain
 available for arbitrarily large artifacts.
+
+## Configuring test batches
+
+The default planning budget produces up to 32 runtime jobs, targeting at
+least four cases per job. For a different isolation/parallelism tradeoff:
+
+```console
+python3 lib/flake-test-packages.py plan \
+  --system x86_64-linux --output ci-plan/test-packages.json \
+  --max-test-jobs 32 --tests-per-job 4
+```
+
+The generated GitHub matrix contains an ID and an explicit list of test
+package names for each job. The `batch` command imports the NAR once and
+executes every selected case in an individual workspace, writing independent
+`evidence.json` records. Failure of one test does not skip the other tests
+in its batch. The final verifier requires one passing report for every
+declared case.
+
+A shared runner is not a security isolation boundary. Use one test per job
+(`--tests-per-job 1 --max-test-jobs 256`) for small inventories requiring
+separate runners. Larger inventories need either batching or independent
+workflow partitioning; do not assume one GitHub job per test case.

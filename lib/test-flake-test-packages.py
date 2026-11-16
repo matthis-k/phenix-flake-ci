@@ -30,13 +30,31 @@ def test_plan(**entries):
 
 
 class TestPackageTests(unittest.TestCase):
-    def test_matrix_excess_fails_before_workflow_dispatch(self):
-        plan = test_plan(**{f"case{i}": test_item(f"case{i}") for i in range(257)})
-        with self.assertRaisesRegex(ValueError, "at most 256"):
-            subject.validate(plan)
-        permitted = test_plan(**{f"case{i}": test_item(f"case{i}")
-                                for i in range(256)})
-        self.assertIs(subject.validate(permitted), permitted)
+    def test_deterministic_batch_partition_preserves_all_tests_above_256(self):
+        plan = test_plan(**{f"case{i:04d}": test_item(f"case{i:04d}")
+                            for i in range(1024)})
+        self.assertIs(subject.validate(plan), plan)
+        batches = subject.make_batches(plan["tests"])
+        self.assertEqual(batches, subject.make_batches(plan["tests"]))
+        self.assertEqual(len(batches), subject.DEFAULT_MAX_TEST_JOBS)
+        self.assertTrue(all(batch["names"] for batch in batches))
+        self.assertEqual(set(name for batch in batches for name in batch["names"]),
+                         set(plan["tests"]))
+        self.assertEqual(sum(len(batch["names"]) for batch in batches), 1024)
+        self.assertLessEqual(max(map(lambda x: len(x["names"]), batches)) -
+                             min(map(lambda x: len(x["names"]), batches)), 1)
+        self.assertEqual(subject.make_batches({}), [])
+        self.assertEqual(len(subject.make_batches({
+            "one": test_item("one"), "two": test_item("two")})), 1)
+        self.assertEqual(len(subject.make_batches({
+            "one": test_item("one"), "two": test_item("two")},
+            tests_per_job=1)), 2)
+        for bad in (0, -1, 257, True):
+            with self.subTest(max_jobs=bad), self.assertRaises(ValueError):
+                subject.make_batches(plan["tests"], max_jobs=bad)
+        for bad in (0, -4, True):
+            with self.subTest(tests_per_job=bad), self.assertRaises(ValueError):
+                subject.make_batches(plan["tests"], tests_per_job=bad)
 
     def test_untrusted_staged_dag_executes_all_prebuilt_test_packages(self):
         workflow = (Path(__file__).resolve().parents[1] /
@@ -57,7 +75,10 @@ class TestPackageTests(unittest.TestCase):
                         join.index("flake-test-packages.py export"))
         self.assertIn("needs: [plan, join]", test)
         self.assertIn("--closure dag-test-closure/closure.nar", test)
-        self.assertIn("flake-test-packages.py run", test)
+        self.assertIn("flake-test-packages.py batch", test)
+        self.assertIn("toJSON(matrix.names)", test)
+        self.assertIn("--results dag-test-result/", test)
+        self.assertIn("matrix.id", test)
         self.assertIn("access-tokens =", test)
         self.assertNotIn("github_access_token:", test)
         self.assertNotIn("secrets.GITHUB_TOKEN", test)
@@ -76,7 +97,10 @@ class TestPackageTests(unittest.TestCase):
         self.assertLess(coordinator.index("flake-test-packages.py export"), coordinator.index("name: remote-test-closure-"))
         self.assertIn("if-no-files-found: error", coordinator)
         self.assertIn("needs: [plan, coordinator]", runner)
-        self.assertLess(runner.index("name: remote-test-closure-"), runner.index("flake-test-packages.py run"))
+        self.assertLess(runner.index("name: remote-test-closure-"), runner.index("flake-test-packages.py batch"))
+        self.assertIn("toJSON(matrix.names)", runner)
+        self.assertIn("--results \"ci-result/\"", runner)
+        self.assertIn("matrix.id", runner)
         self.assertIn("--closure ci-test-closure/closure.nar", runner)
         self.assertIn("save: false", runner)
         self.assertIn("contents: read", runner)
@@ -85,6 +109,82 @@ class TestPackageTests(unittest.TestCase):
         self.assertNotIn("secrets.GITHUB_TOKEN", runner)
         for forbidden in ("TS_OAUTH", "id-token: write", "nix build", "secrets: inherit"):
             self.assertNotIn(forbidden, runner)
+
+    def test_batch_imports_closure_once_and_retains_individual_failure_evidence(self):
+        plan = test_plan(**{name: test_item(name) for name in ("alpha", "beta", "gamma")})
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            archive = folder / "closure.nar"
+            archive.write_bytes(b"one-archive")
+            manifest = folder / "plan.json"
+            subject.save(manifest, plan)
+            args = type("Args", (), {
+                "plan": manifest, "closure": archive,
+                "names_json": '["alpha","beta","gamma"]',
+                "results": folder / "results", "expected_commit": C,
+            })()
+            calls = []
+
+            def fake_run(argv, **kwargs):
+                calls.append(list(argv))
+                if argv == ["nix-store", "--import"]:
+                    self.assertEqual(kwargs["stdin"].read(), b"one-archive")
+                    return subprocess.CompletedProcess(argv, 0)
+                self.assertEqual(len(argv), 1)
+                name = next(name for name, item in plan["tests"].items()
+                            if item["exe"] == argv[0])
+                if name == "beta":
+                    raise subprocess.CalledProcessError(7, argv)
+                runtime_dir = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                runtime_dir.mkdir(parents=True, exist_ok=True)
+                (runtime_dir / "result.json").write_text('{"status":"pass"}')
+                return subprocess.CompletedProcess(argv, 0)
+
+            paths = "\n".join(sorted(x["out"] for x in plan["tests"].values())) + "\n"
+            with mock.patch.object(subject, "git_head") as no_git, mock.patch.object(
+                    subject.subprocess, "run", side_effect=fake_run), mock.patch.object(
+                    subject.subprocess, "check_output", return_value=paths) as info:
+                with self.assertRaisesRegex(ValueError, "1 of 3 test packages failed"):
+                    subject.batch_command(args)
+                no_git.assert_not_called()
+                info.assert_called_once()
+            self.assertEqual(sum(argv == ["nix-store", "--import"] for argv in calls), 1)
+            self.assertEqual(len(calls), 4)
+            for name, expected in (("alpha", "pass"), ("beta", "failed"),
+                                   ("gamma", "pass")):
+                evidence = subject.load(args.results / name / "evidence.json")
+                self.assertEqual(evidence["name"], name)
+                self.assertEqual(evidence["status"], expected)
+                self.assertEqual(evidence["digest"], plan["digest"])
+            self.assertIn("returned non-zero exit status",
+                          subject.load(args.results / "beta" / "evidence.json")["reason"])
+            subject.save(args.results / "beta" / "evidence.json",
+                         {**subject.load(args.results / "beta" / "evidence.json"),
+                          "status": "pass"})
+            with self.assertRaisesRegex(ValueError, "expected 3"):
+                (args.results / "beta" / "evidence.json").unlink()
+                subject.verify_command(type("Args", (), {
+                    "plan": manifest, "results": args.results,
+                })())
+
+    def test_bad_batch_cannot_import_or_execute_anything(self):
+        plan = test_plan(alpha=test_item("alpha"))
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            path = folder / "plan.json"
+            subject.save(path, plan)
+            with mock.patch.object(subject, "git_head", return_value=C), mock.patch.object(
+                    subject.subprocess, "run") as no_run:
+                for invalid in ('[]', '["alpha","alpha"]', '["missing"]',
+                                '["alpha",3]', '"alpha"', 'not json'):
+                    args = type("Args", (), {
+                        "plan": path, "closure": folder / "nonexistent.nar",
+                        "names_json": invalid, "results": folder / "results",
+                        "expected_commit": C,
+                    })()
+                    with self.subTest(names_json=invalid), self.assertRaises(ValueError):
+                        subject.batch_command(args)
+                no_run.assert_not_called()
 
     def test_closure_handoff_executes_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:

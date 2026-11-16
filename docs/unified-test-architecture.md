@@ -101,10 +101,20 @@ artifact scheduling, not a duplicate framework for test-specific scheduling.
 - **Execution versus cacheability:** build-time checks are cacheable; runtime
   tests execute fresh and may require host resources.
 - **Shared compiler graph versus test parallelism:** deduplicate preparation
-  first, fan out execution afterwards. One job per package is currently
-  simple but incurs GitHub runner startup overhead for tiny tests. Above
-  256 runtime packages, planning fails explicitly until verified batching
-  is available rather than silently dropping tests.
+  first, then schedule deterministic **bounded batches** (default: at most
+  32 GitHub jobs and approximately four tests per job before reaching that
+  cap). Each case runs in its own test-runner workspace, with a separate
+  evidence file. A batch imports the closure just once, continues after
+  individual case failures and fails as a job if any case fails. The acceptance
+  gate verifies the complete exact-head test inventory; more than 256 cases
+  no longer silently disappear or exceed the GitHub matrix limit.
+- **Runner isolation versus performance:** unlike one job per case, cases
+  in one batch share a GitHub runner and Nix store. The temporary test
+  workspace is not a security sandbox; a malicious case can affect subsequent
+  cases in its batch. Use explicit independent job placement for tests that
+  require host-level isolation. Defaults are adjustable during planning via
+  `--max-test-jobs` (1 to 256) and `--tests-per-job` (positive integer).
+  Duration-aware balancing requires measured case timings and is not claimed.
 - **Safety versus environment flexibility:** Unix sockets and process groups
   are a deliberately narrow first backend. They provide lifecycle guarantees
   without implying container or VM isolation.
@@ -190,3 +200,15 @@ The executable name follows Nix's documented derivation application order:
 missing binaries and non-executable package outputs fail instead of attempting
 a rebuild. The inventory schema is intentionally replaced with version 2,
 without a compatibility shim for the older manifest format.
+
+## Batched tester evidence
+
+`flake-test-packages.py plan` generates a deterministic matrix with entries
+`{ id, names }` directly from the frozen `test.*` inventory. Both trusted
+and staged runtime backends feed `names` to the same `batch` command. The
+command imports the immutable NAR closure once, checks the selected output
+store paths offline, runs each frozen executable and writes
+`<results>/<name>/evidence.json`. Failures are collected without skipping
+other cases, and the final acceptance gate rejects missing, repeated, stale,
+or failed case evidence. The existing single-case `run` command remains
+available for jobs requiring independent runner isolation, not as a legacy shim.
