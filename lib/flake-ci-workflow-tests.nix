@@ -33,6 +33,7 @@ in
     assert builtins.match ".*flake-checks.yml@${sha}.*" matrixYaml != null;
     assert builtins.match ".*library_ref: \"${sha}\".*" matrixYaml != null;
     assert builtins.match ".*pull_request:.*" matrixYaml != null;
+    assert builtins.match ".*ready_for_review.*" matrixYaml != null;
     assert builtins.match ".*id-token: write.*" matrixYaml == null;
     true;
 
