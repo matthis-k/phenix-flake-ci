@@ -220,7 +220,7 @@ jobs:
             --test-packages ci-plan/test-packages.json --test-root ci-result/test-package-roots
       - name: Probe and export independent ready runtime artifacts
         id: runtime_ready
-        if: ${{ always() && steps.build.outcome != 'skipped' && needs.plan.outputs.test_count != '0' }}
+        if: ${{ !cancelled() && steps.build.outcome != 'skipped' && needs.plan.outputs.test_count != '0' }}
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           TEST_COUNT: ${{ needs.plan.outputs.test_count }}
@@ -245,7 +245,7 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ always() && steps.runtime_ready.outputs.ready == 'true' }}
+        if: ${{ !cancelled() && steps.runtime_ready.outputs.ready == 'true' }}
         with:
           name: remote-test-closure-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-test-closure/
@@ -281,7 +281,7 @@ jobs:
     needs: [plan, coordinator]
     # Test independently realized packages even when unrelated checks fail.
     # The final acceptance job still requires coordinator success.
-    if: ${{ always() && needs.plan.result == 'success' && needs.coordinator.outputs.runtime_ready == 'true' && needs.plan.outputs.test_count != '0' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.coordinator.outputs.runtime_ready == 'true' && needs.plan.outputs.test_count != '0' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
