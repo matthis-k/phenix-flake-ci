@@ -53,8 +53,15 @@ let
       pname = "ci-deps-${profile}";
       # Dummy workspace sources: real code compile errors belong exclusively
       # to each downstream group, not to this shared compilation barrier.
-      cargoExtraArgs = lib.escapeShellArgs ([ "--locked" "--workspace" ]
-        ++ profiles.${profile});
+      # Crane's buildDepsOnly already appends --all-targets to cargo check.
+      # Target selectors (--lib/--tests/--all-targets) belong to the real
+      # cargoTest leaf only; dependency preparation needs feature flags.
+      cargoExtraArgs = lib.escapeShellArgs (
+        [ "--locked" "--workspace" ]
+        ++ builtins.filter (flag: !builtins.elem flag [
+          "--all-targets" "--lib" "--tests"
+        ]) profiles.${profile}
+      );
     });
   }) usedProfiles);
   checks = builtins.mapAttrs (name: spec:
