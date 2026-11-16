@@ -62,7 +62,13 @@ def hostname(args):
 
 def peers(status):
     result = {}
-    for peer in status.get("Peer", {}).values():
+    # Tailscale can report "Peer": null immediately after a successful
+    # tailscale up, before its first peer snapshot has arrived. This is a
+    # normal not-yet-ready state, not a failed authentication attempt.
+    table = status.get("Peer") if isinstance(status, dict) else None
+    if not isinstance(table, dict):
+        return result
+    for peer in table.values():
         if not isinstance(peer, dict):
             continue
         name = peer.get("HostName")
