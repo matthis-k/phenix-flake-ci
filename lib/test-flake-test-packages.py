@@ -64,6 +64,9 @@ class TestPackageTests(unittest.TestCase):
         test = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
         gate = workflow.split("  acceptance:\n", 1)[1]
         self.assertIn("flake-test-packages.py plan", plan)
+        self.assertIn("github.event.pull_request.number", workflow)
+        self.assertNotIn("github.head_ref || github.ref_name", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
         self.assertIn("test_matrix:", plan)
         self.assertIn("test_count:", plan)
         self.assertIn("--test-packages ci-plan/test-packages.json", join)

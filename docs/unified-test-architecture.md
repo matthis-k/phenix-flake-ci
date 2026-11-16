@@ -302,3 +302,12 @@ and final evidence verification retain `contents: read` and cannot request
 an OIDC token. GitHub's job-scoped permissions provide this boundary directly,
 without a separate credential broker. Worker jobs still execute only on the
 trusted workflow, never the untrusted PR fallback.
+
+## Pull-request cancellation identity
+
+The untrusted staged reusable workflow uses the **PR number**, not the
+head branch name, as its cancellation key. Two unrelated PRs can use the
+same branch name (especially across forks), but must never cancel each
+other's test runs. Push-triggered invocations do not cancel each other,
+matching the generated caller workflow policy. This requires no new
+scheduler or worker state.
