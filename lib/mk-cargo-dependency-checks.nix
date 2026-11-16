@@ -79,7 +79,13 @@ let
           # Overlay group implementation files without deleting manifests
           # or dummy targets of unselected workspace members.
           chmod -R u+w "$sourceRoot"
+          # Caller overlays may contain a rewritten root manifest or lock.
+          # Never let those change the complete Cargo resolution context.
+          cp "$sourceRoot/Cargo.toml" "$TMPDIR/ci-full-Cargo.toml"
+          cp "$sourceRoot/Cargo.lock" "$TMPDIR/ci-full-Cargo.lock"
           cp -r --no-preserve=mode ${spec.src}/. "$sourceRoot"/
+          cp "$TMPDIR/ci-full-Cargo.toml" "$sourceRoot/Cargo.toml"
+          cp "$TMPDIR/ci-full-Cargo.lock" "$sourceRoot/Cargo.lock"
         '' else "";
       cargoArtifacts = deps.${spec.profile};
       # These are terminal checks: retaining an entire (potentially multi-GB)
