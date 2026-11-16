@@ -115,6 +115,36 @@ class RemoteBuildersTest(unittest.TestCase):
             self.assertIn("ssh-ng://runner@100.66.1.2", Path(args.machines).read_text())
             self.assertEqual(json.loads(Path(args.hosts).read_text()), {expected: "100.66.1.2"})
 
+    def test_cleanup_releases_workers_after_missing_discovery_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            names = [remote.worker_name(234, 1, 2, i) for i in (1, 2)]
+            args = type("Args", (), {
+                "hosts": str(Path(directory, "missing-hosts.json")),
+                "run_id": 234, "attempt": 1, "count": 2, "timeout": 8,
+            })()
+            responses = iter([
+                {"Peer": None},
+                {"Peer": {
+                    "a": {"HostName": names[0], "TailscaleIPs": ["100.64.1.1"]},
+                    "b": {"HostName": names[1], "TailscaleIPs": ["100.64.1.2"]},
+                    "unrelated": {"HostName": "other", "TailscaleIPs": ["100.64.1.3"]},
+                }},
+            ])
+            released = []
+
+            def invoke(*cmd, **kwargs):
+                if cmd[:2] == ("tailscale", "status"):
+                    return type("Reply", (), {"stdout": json.dumps(next(responses))})()
+                self.assertEqual(cmd[:2], ("sudo", "ssh"))
+                released.append(cmd[2])
+                return type("Reply", (), {"stdout": ""})()
+
+            with mock.patch.object(remote, "invoke", side_effect=invoke), \
+                 mock.patch.object(remote.time, "sleep") as sleep:
+                remote.stop(args)
+            sleep.assert_called_once_with(3)
+            self.assertEqual(released, ["runner@100.64.1.1", "runner@100.64.1.2"])
+
     def test_matrix_outputs_json_for_job_matrix(self):
         with redirect_stdout(io.StringIO()) as buf:
             remote.matrix(type("A", (), {"count": 4})())
@@ -272,6 +302,9 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py", workflow)
         self.assertNotIn("actions/checkout@", test_stage)
         self.assertIn("toJSON(matrix.names)", test_stage)
+        self.assertIn("--run-id \"${{ github.run_id }}\"", coordinator)
+        self.assertIn("--attempt \"${{ github.run_attempt }}\"", coordinator)
+        self.assertIn("--count \"${{ inputs.worker_count }}\"", coordinator)
         self.assertIn("--expected-commit", test_stage)
         self.assertNotIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", test_stage)
         self.assertIn("needs: [plan, worker, coordinator, test]", acceptance)
