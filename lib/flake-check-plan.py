@@ -47,7 +47,7 @@ def discover_prebuild_packages(flake, system):
     ]))
     if not isinstance(names, list) or not all(
             isinstance(name, str) and CHECK.fullmatch(name) for name in names):
-        raise ValueError("invalid flake package inventory for prebuild")
+        raise ValueError("invalid flake package name inventory for prebuild")
     return [f".#packages.{system}.{name}" for name in sorted(set(names))
             if name.startswith("ci-prebuild-")]
 
