@@ -260,3 +260,13 @@ reduction. A real Phenix AI consumer pilot produced a 221 MB uncompressed
 closure before the backend change. Those are *transfer-size measurements*;
 they do not prove a particular overall CI speedup. The compression level is
 kept fixed and fast rather than becoming another public setting.
+
+## Runtime tester Nix store reuse
+
+Trusted coordinator jobs own the persistent Nix store cache. Runtime test jobs
+already download and import a complete same-run NAR closure for all planned
+test outputs, so the extra read-only Nix cache restoration before this import
+was redundant. The test stage now imports its NAR without restoring the
+coordinator cache, avoiding duplicate transfer and cache extraction.
+The exact-head gate is unchanged. Actual time savings depend on workload and
+are not inferred from a library-only test.
