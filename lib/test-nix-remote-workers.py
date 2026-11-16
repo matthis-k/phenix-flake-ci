@@ -149,6 +149,21 @@ class RemoteBuildersTest(unittest.TestCase):
             self.assertEqual(output.getvalue().count("remote Nix store denied"), 1)
             self.assertFalse(Path(args.machines).exists())
 
+    def test_builder_uses_pinned_plan_artifact_without_checkout(self):
+        workflow = (Path(__file__).parent.parent /
+                    ".github/workflows/flake-nix-builders.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  worker:\n", 1)[0]
+        worker = workflow.split("  worker:\n", 1)[1].split("  coordinator:\n", 1)[0]
+        self.assertIn("cp .ci-tools/flake-ci/lib/nix-remote-workers.py ci-plan/remote-worker.py", plan)
+        self.assertIn("name: remote-nix-plan-", worker)
+        self.assertIn("path: ci-plan/", worker)
+        self.assertIn("ci-plan/remote-worker.py hostname", worker)
+        self.assertIn("ci-plan/remote-worker.py hold", worker)
+        self.assertNotIn("actions/checkout@", worker)
+        self.assertNotIn(".ci-tools/flake-ci/", worker)
+        self.assertIn("cachix/install-nix-action@", worker)
+        self.assertIn("tailscale/github-action@", worker)
+
     def test_reusable_workflow_uses_distinct_artifacts_for_each_pool_size(self):
         # Reusable calls run in the *same* GitHub workflow run. artifact v4
         # refuses duplicate names, including across sequential 2/4/8 calls.
