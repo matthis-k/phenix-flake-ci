@@ -28,15 +28,25 @@ let
     && builtins.all (item: builtins.isString item && item != "") argv;
   validatedGroups = builtins.mapAttrs (name: spec:
     if !validName name || !builtins.isAttrs spec
-       || builtins.any (field: !(builtins.elem field [ "packages" "profile" "args" "src" ]))
+       || builtins.any (field: !(builtins.elem field [ "packages" "profile" "args" "src" "targets" ]))
          (builtins.attrNames spec)
        || !validNames (spec.packages or null)
        || !validName (spec.profile or "default")
        || !(builtins.hasAttr (spec.profile or "default") profiles)
        || !validArgv (spec.args or [ ])
+       || (spec ? targets && !validArgv spec.targets)
     then fail "invalid packages, profile, or extra arguments in test group ${name}"
     else spec // { profile = spec.profile or "default"; args = spec.args or [ ]; }
   ) groups;
+  # Default target selectors and feature flags share a backwards-compatible
+  # profile list. A group's target override changes *only* target selection;
+  # feature/compilation flags still derive from the dependency profile.
+  targetSelectors = [
+    "--all-targets" "--lib" "--tests" "--doc"
+    "--bins" "--examples" "--benches"
+  ];
+  dependencyArgs = profile:
+    builtins.filter (flag: !(builtins.elem flag targetSelectors)) profiles.${profile};
   usedProfiles = lib.unique (map
     (name: validatedGroups.${name}.profile)
     (builtins.attrNames validatedGroups));
@@ -58,9 +68,7 @@ let
       # cargoTest leaf only; dependency preparation needs feature flags.
       cargoExtraArgs = lib.escapeShellArgs (
         [ "--locked" "--workspace" ]
-        ++ builtins.filter (flag: !builtins.elem flag [
-          "--all-targets" "--lib" "--tests"
-        ]) profiles.${profile}
+        ++ dependencyArgs profile
       );
     });
   }) usedProfiles);
@@ -95,7 +103,7 @@ let
       cargoExtraArgs = lib.escapeShellArgs (
         [ "--locked" ]
         ++ lib.concatMap (package: [ "--package" package ]) spec.packages
-        ++ profiles.${spec.profile}
+        ++ (if spec ? targets then dependencyArgs spec.profile ++ spec.targets else profiles.${spec.profile})
         ++ spec.args
       );
       cargoTestExtraArgs = "--no-fail-fast";
