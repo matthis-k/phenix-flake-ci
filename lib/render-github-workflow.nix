@@ -355,6 +355,7 @@ let
     ""
     "on:"
     "  pull_request:"
+    "    types: [opened, reopened, synchronize, ready_for_review]"
     "  push:"
     "    branches:"
     "      - ${yaml mainBranch}"
