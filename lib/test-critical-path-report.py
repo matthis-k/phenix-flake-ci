@@ -83,5 +83,72 @@ class CriticalPathReportTests(unittest.TestCase):
             subject.report(run, jobs, HEAD)
 
 
+    def test_coordinated_workflow_without_legacy_shards(self):
+        run, response = sample()
+        response["jobs"][1]["name"] = "remote / Nix coordinator"
+        response["jobs"][2]["name"] = "remote / Nix builder 1"
+        response["jobs"].append({
+            "id": 5, "name": "remote / conditional cache publishing",
+            "status": "completed", "conclusion": "skipped",
+            "started_at": None, "completed_at": None,
+        })
+        response["total_count"] += 1
+        metrics = subject.report(run, response, HEAD)
+        self.assertNotIn("tail_shard", metrics)
+        self.assertNotIn("shards", metrics)
+        self.assertEqual(metrics["skipped_jobs"], ["remote / conditional cache publishing"])
+        self.assertEqual(metrics["failed_jobs"], [])
+        self.assertEqual(metrics["job_span_seconds"], 280)
+        self.assertEqual(metrics["finalization_lag_seconds"], 10)
+        self.assertEqual(metrics["runner_minutes"], 5.72)
+        self.assertEqual(metrics["jobs"][0]["name"],
+                         "candidate / Flake matrix evidence aggregate")
+        self.assertEqual(len(metrics["jobs"]), 4)
+
+    def test_failure_diagnostics_do_not_reclassify_failure_as_success(self):
+        run, response = sample()
+        run["conclusion"] = "failure"
+        response["jobs"][2]["conclusion"] = "failure"
+        with self.assertRaisesRegex(ValueError, "not a successful"):
+            subject.report(run, response, HEAD)
+        metrics = subject.report(run, response, HEAD, diagnostic=True)
+        self.assertEqual(metrics["run_conclusion"], "failure")
+        self.assertEqual(metrics["failed_jobs"], ["candidate / Check shard-02"])
+        self.assertEqual(metrics["shards"], {"00": 70, "02": 200})
+        self.assertEqual(metrics["runner_minutes"], 5.72)
+        # Even diagnostic mode rejects incompletely reported jobs.
+        response["jobs"][2]["status"] = "in_progress"
+        with self.assertRaisesRegex(ValueError, "failed or unfinished"):
+            subject.report(run, response, HEAD, diagnostic=True)
+
+    def test_only_skipped_jobs_have_no_measurable_duration(self):
+        run, response = sample()
+        response["jobs"] = [{
+            "id": 99, "name": "not scheduled", "status": "completed",
+            "conclusion": "skipped", "started_at": None, "completed_at": None,
+        }]
+        response["total_count"] = 1
+        with self.assertRaisesRegex(ValueError, "no executed"):
+            subject.report(run, response, HEAD)
+
+    def test_duplicate_named_shards_fail_instead_of_overwriting(self):
+        run, response = sample()
+        response["jobs"][2]["name"] = response["jobs"][1]["name"]
+        with self.assertRaisesRegex(ValueError, "duplicate named"):
+            subject.report(run, response, HEAD)
+
+    def test_invalid_job_name_and_workflow_outcome_rejected(self):
+        run, response = sample()
+        response["jobs"][0]["name"] = ""
+        with self.assertRaisesRegex(ValueError, "missing job name"):
+            subject.report(run, response, HEAD)
+        response["jobs"][0]["name"] = "writer"
+        run["conclusion"] = "cancelled"
+        with self.assertRaisesRegex(ValueError, "not a successful"):
+            subject.report(run, response, HEAD)
+        self.assertEqual(subject.report(run, response, HEAD, diagnostic=True)
+                         ["run_conclusion"], "cancelled")
+
+
 if __name__ == "__main__":
     unittest.main()
