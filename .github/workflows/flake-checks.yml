@@ -31,6 +31,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       digest: ${{ steps.plan.outputs.digest }}
       cache_prefix: ${{ steps.plan.outputs.cache_prefix }}
+      cache_family: ${{ steps.plan.outputs.cache_family }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -104,6 +105,8 @@ jobs:
           restore-prefixes-first-match: |
             remote-${{ needs.plan.outputs.cache_prefix }}-
             ${{ needs.plan.outputs.cache_prefix }}-
+            remote-${{ needs.plan.outputs.cache_family }}-
+            ${{ needs.plan.outputs.cache_family }}-
           gc-max-store-size-linux: ${{ inputs.cache_max_store_size_linux }}
       - name: Prebuild shared declared packages
         shell: bash
