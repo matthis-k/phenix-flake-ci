@@ -178,7 +178,7 @@ def build_command(args):
         roots = [target(plan["system"], name) for name in tests]
         # The symlink keeps exactly the executable test output closures live
         # until the shared coordinator's cache-saving post-job hook.
-        subprocess.run(["nix", "build", "--no-write-lock-file", "-L", "--out-link", args.root,
+        subprocess.run(["nix", "build", "--keep-going", "--no-write-lock-file", "-L", "--out-link", args.root,
                         *roots], check=True)
         for name, entry in tests.items():
             if not Path(entry["exe"]).is_file() or not os.access(entry["exe"], os.X_OK):
