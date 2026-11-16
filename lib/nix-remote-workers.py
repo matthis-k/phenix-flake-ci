@@ -174,17 +174,43 @@ def build(args):
 
 def stop(args):
     path = Path(args.hosts)
-    if not path.exists():
-        return
-    hosts = json.loads(path.read_text())
+    hosts = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(hosts, dict):
+        raise ValueError("invalid remote worker host inventory")
+
+    count = getattr(args, "count", None)
+    expected = (set(worker_name(args.run_id, args.attempt, count, i)
+                    for i in range(1, count + 1)) if count else set())
+    # If discovery aborted before persisting a complete host list, the
+    # already-running workers still need releasing. Resolve their exact
+    # run/attempt identities through the current authenticated tailnet.
+    # This is bounded; never issue SSH to unrelated peers.
+    if expected and not expected.issubset(hosts):
+        deadline = time.monotonic() + positive(args.timeout, 1, 180)
+        while time.monotonic() < deadline and not expected.issubset(hosts):
+            try:
+                visible = peers(json.loads(invoke("tailscale", "status",
+                                                 "--json").stdout))
+                hosts.update({name: visible[name] for name in expected
+                              if name in visible})
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                    json.JSONDecodeError):
+                pass  # transient daemon/bootstrap state; retry below
+            if not expected.issubset(hosts):
+                time.sleep(3)
+
     errors = []
-    for ip in hosts.values():
+    targets = {name: ip for name, ip in hosts.items()
+               if not expected or name in expected}
+    for ip in sorted(set(targets.values())):
         try:
             invoke("sudo", "ssh", f"runner@{ip}", "touch", COMPLETION, timeout=15)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             errors.append(str(exc))
-    if errors:
-        raise RuntimeError(f"could not release {len(errors)} remote workers")
+    missing = sorted(expected - targets.keys())
+    if missing or errors:
+        raise RuntimeError(f"could not release workers: missing={missing}, "
+                           f"ssh_failures={len(errors)}")
 
 
 def hold(args):
@@ -232,6 +258,10 @@ def main():
     b.set_defaults(func=build)
     s = sub.add_parser("stop")
     s.add_argument("--hosts", required=True)
+    s.add_argument("--run-id", type=int)
+    s.add_argument("--attempt", type=int)
+    s.add_argument("--count", type=int)
+    s.add_argument("--timeout", type=int, default=45)
     s.set_defaults(func=stop)
     w = sub.add_parser("hold")
     w.add_argument("--timeout", type=int, default=1800)
