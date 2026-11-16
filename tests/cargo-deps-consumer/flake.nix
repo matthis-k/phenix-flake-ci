@@ -8,14 +8,37 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      inherit (pkgs) lib;
+      group = member:
+        let
+          manifest = (pkgs.formats.toml { }).generate "Cargo.toml" {
+            workspace = {
+              members = [ member ];
+              resolver = "2";
+            };
+          };
+        in {
+          packages = [ "cargo-deps-${member}" ];
+          # Include only this group and its workspace manifest/lock. Changes
+          # to the other group cannot invalidate this check's source path.
+          src = lib.fileset.toSource {
+            root = ./workspace;
+            fileset = lib.fileset.unions [
+              ./workspace/Cargo.toml
+              ./workspace/Cargo.lock
+              (./workspace + "/${member}")
+            ];
+          };
+          postUnpack = ''cp ${manifest} "$sourceRoot/Cargo.toml"'';
+        };
       suite = phenix-flake-ci.lib.mkCargoDependencyChecks {
         inherit pkgs;
         craneLib = crane.mkLib pkgs;
-        src = ../cargo-test-consumer;
-        lockFile = ../cargo-test-consumer/Cargo.lock;
+        src = ./workspace;
+        lockFile = ./workspace/Cargo.lock;
         groups = {
-          root.packages = [ "generic-cargo-test-fixture" ];
-          child.packages = [ "generic-cargo-child" ];
+          a = group "a";
+          b = group "b";
         };
       };
     in {
