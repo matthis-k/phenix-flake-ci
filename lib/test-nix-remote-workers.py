@@ -184,7 +184,7 @@ class RemoteBuildersTest(unittest.TestCase):
         # refuses duplicate names, including across sequential 2/4/8 calls.
         workflow = (Path(__file__).parent.parent / ".github/workflows/flake-nix-builders.yml").read_text()
         self.assertEqual(
-            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 4
+            workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}"), 5
         )
         self.assertEqual(
             workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}"), 2
@@ -203,7 +203,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn('artifact_namespace: { type: string, default: "" }', workflow)
         self.assertIn("inputs.cache_namespace", workflow)
         self.assertIn("inputs.artifact_namespace", workflow)
-        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 4)
+        self.assertEqual(workflow.count("name: remote-nix-plan-${{ inputs.worker_count }}${{"), 5)
         self.assertEqual(workflow.count("name: remote-nix-evidence-${{ inputs.worker_count }}${{"), 2)
         coordinator = workflow.split("  coordinator:\n", 1)[1].split("  test:\n", 1)[0]
         self.assertIn("restore-prefixes-first-match:", coordinator)
