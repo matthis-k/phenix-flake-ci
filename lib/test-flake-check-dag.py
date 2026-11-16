@@ -88,6 +88,56 @@ class DagTests(unittest.TestCase):
         self.assertEqual(dag.graph_summary(plan, mkgraph()),
                          dag.graph_summary(plan, modern))
 
+    def test_deep_chain_uses_constant_depth_iteration(self):
+        # Real Nix flakes can have thousands of sequential derivations.
+        # A recursive closure expander hits Python's recursion limit here.
+        size = 2500
+        paths = [f"/nix/store/{index + 1:032x}-node-{index}.drv"
+                 for index in range(size)]
+        graph = {
+            path: {"inputDrvs": {paths[index - 1]: ["out"]} if index else {}}
+            for index, path in enumerate(paths)
+        }
+        checks = {"start": paths[0], "middle": paths[1250], "end": paths[-1]}
+        plan = dag.planner.make_plan(
+            checks, {"schemaVersion": 1, "system": "x86_64-linux",
+                     "shardCount": 3}, SHA)
+        report = dag.graph_summary(plan, graph)
+        self.assertEqual(report["derivationCount"], size)
+        self.assertEqual(report["checkWaves"], [["start"], ["middle"], ["end"]])
+        self.assertEqual(report["checkDependencies"]["end"], ["middle", "start"])
+        self.assertEqual(report["criticalCheckDepth"], 2)
+
+    def test_wide_fan_in_and_named_derivation_aliases(self):
+        # Many unrelated leaves should not balloon into transitive set copies.
+        leaves = [f"/nix/store/{index + 100:032x}-leaf-{index}.drv"
+                  for index in range(1200)]
+        core = drv("a", "check-core")
+        out = drv("b", "check-output")
+        graph = {node: {"inputDrvs": {}} for node in leaves}
+        graph[core] = {"inputDrvs": {node: ["out"] for node in leaves}}
+        graph[out] = {"inputDrvs": {core: ["out"]}}
+        checks = {"core": core, "alias": core, "output": out}
+        plan = dag.planner.make_plan(
+            checks, {"schemaVersion": 1, "system": "x86_64-linux",
+                     "shardCount": 3}, SHA)
+        report = dag.graph_summary(plan, graph)
+        self.assertEqual(report["checkDependencies"]["core"], [])
+        self.assertEqual(report["checkDependencies"]["alias"], [])
+        self.assertEqual(report["checkDependencies"]["output"], ["alias", "core"])
+        self.assertEqual(report["checkWaves"], [["alias", "core"], ["output"]])
+
+    def test_disconnected_cyclic_derivations_fail_closed(self):
+        # Validate the *entire* recursive graph, not just paths reached from
+        # check roots. Unexpected cyclic records must never be hidden.
+        graph = mkgraph()
+        hidden_a = drv("x", "hidden-a")
+        hidden_b = drv("y", "hidden-b")
+        graph[hidden_a] = {"inputDrvs": {hidden_b: ["out"]}}
+        graph[hidden_b] = {"inputDrvs": {hidden_a: ["out"]}}
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            dag.graph_summary(mkplan(), graph)
+
     def test_publish_requires_verified_evidence_and_copies_only_outputs(self):
         plan = mkplan()
         graph = dag.graph_summary(plan, mkgraph())
