@@ -294,6 +294,29 @@ jobs:
             and all(.[]; .type == "suite_definition" and .phase == "test")
           ' "$log" >/dev/null
 
+      - name: Exercise full local CI on clean committed fixture
+        run: |
+          set -euo pipefail
+          (
+            cd tests/declarative-test-consumer
+            # The fixture is a consumer, not the library's own flake. Give it
+            # its own exact Git identity without writing to the outer branch.
+            git init -q
+            git config user.name fixture-ci
+            git config user.email fixture-ci@localhost
+            git add .
+            git commit -qm 'freeze consumer fixture'
+            python3 ../../lib/flake-ci-local.py \
+              --config ci/flake-check-config.nix \
+              --output-dir "$RUNNER_TEMP/local-flake-ci"
+          )
+          results="$(find "$RUNNER_TEMP/local-flake-ci" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$results"
+          jq -e '.checks | length == 8' "$results/evidence.json" >/dev/null
+          for name in rpc rpc-repeat; do
+            jq -e '.status == "pass"' "$results/runtime-results/$name/evidence.json" >/dev/null
+          done
+
       - name: Evaluate flake
         run: nix flake check --no-build
 
