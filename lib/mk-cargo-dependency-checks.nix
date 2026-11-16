@@ -74,6 +74,10 @@ let
       src = spec.src or src;
       postUnpack = spec.postUnpack or "";
       cargoArtifacts = deps.${spec.profile};
+      # These are terminal checks: retaining an entire (potentially multi-GB)
+      # Cargo target corpus after each independent test suite is redundant.
+      # Only buildDepsOnly publishes reusable compiler artifacts.
+      doInstallCargoArtifacts = false;
       cargoExtraArgs = lib.escapeShellArgs (
         [ "--locked" ]
         ++ lib.concatMap (package: [ "--package" package ]) spec.packages
