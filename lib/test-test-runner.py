@@ -21,7 +21,7 @@ class RunnerTests(unittest.TestCase):
             # A killed orphan can remain a zombie until PID 1 reaps it.
             try:
                 return Path(f"/proc/{pid}/stat").read_text().split()[2] not in ("Z", "X")
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 return False
 
         for _ in range(40):
@@ -29,6 +29,15 @@ class RunnerTests(unittest.TestCase):
                 break
             time.sleep(0.025)
         self.assertFalse(running(), "test runner leaked a live descendant")
+
+    def test_descendant_cleanup_probe_accepts_procfs_disappearance(self):
+        # /proc/PID/stat can vanish between open and read during cleanup.
+        # That indicates successful process exit, not a leaked descendant.
+        from unittest import mock
+
+        with mock.patch.object(Path, "read_text",
+                               side_effect=ProcessLookupError(3, "No such process")):
+            self.assert_descendant_stopped(123456)
 
     def test_multiple_assertions_single_execution(self):
         spec = {"command": self.command("from pathlib import Path; import json; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); print(json.dumps({'status':'ready','count':2,'items':['a','b']}))"),

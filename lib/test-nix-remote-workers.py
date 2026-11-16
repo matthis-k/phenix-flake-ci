@@ -79,6 +79,85 @@ class RemoteBuildersTest(unittest.TestCase):
                            "c": {"HostName": "other", "TailscaleIPs": []}}}
         self.assertEqual(remote.peers(status), {"fc-123-1-n2-w1": "100.77.3.8"})
 
+    def test_tailnet_peer_table_can_be_null_while_initializing(self):
+        self.assertEqual(remote.peers({"Peer": None}), {})
+        self.assertEqual(remote.peers({"Peer": []}), {})
+        self.assertEqual(remote.peers({}), {})
+        self.assertEqual(remote.peers(None), {})
+
+    def test_discovery_waits_for_peer_snapshot_after_successful_tailnet_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {
+                "count": 1, "system": "x86_64-linux", "slots": 2,
+                "run_id": 122, "attempt": 1, "timeout": 10,
+                "machines": str(Path(directory, "machines")),
+                "hosts": str(Path(directory, "hosts.json")),
+            })()
+            expected = remote.worker_name(122, 1, 1, 1)
+            replies = iter([
+                {"Peer": None},
+                {"Peer": {"only": {
+                    "HostName": expected, "TailscaleIPs": ["100.66.1.2"],
+                }}},
+            ])
+
+            def invoke(*cmd, **kwargs):
+                if cmd[:2] == ("tailscale", "status"):
+                    return type("Reply", (), {"stdout": json.dumps(next(replies))})()
+                if cmd[:2] == ("sudo", "ssh"):
+                    self.assertEqual(cmd[-2:], ("touch", remote.STARTED))
+                else:
+                    self.assertEqual(cmd[:3], ("sudo", remote.LOCAL_NIX, "store"))
+                return type("Reply", (), {"stdout": ""})()
+
+            with mock.patch.object(remote, "invoke", side_effect=invoke), \
+                 mock.patch.object(remote, "ssh_config"), \
+                 mock.patch.object(remote.time, "sleep") as sleep:
+                remote.discover(args)
+            sleep.assert_called_once_with(4)
+            self.assertIn("ssh-ng://runner@100.66.1.2", Path(args.machines).read_text())
+            self.assertEqual(json.loads(Path(args.hosts).read_text()), {expected: "100.66.1.2"})
+
+    def test_cleanup_releases_workers_after_missing_discovery_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            names = [remote.worker_name(234, 1, 2, i) for i in (1, 2)]
+            args = type("Args", (), {
+                "hosts": str(Path(directory, "missing-hosts.json")),
+                "run_id": 234, "attempt": 1, "count": 2, "timeout": 8,
+            })()
+            responses = iter([
+                {"Peer": None},
+                {"Peer": {
+                    "a": {"HostName": names[0], "TailscaleIPs": ["100.64.1.1"]},
+                    "b": {"HostName": names[1], "TailscaleIPs": ["100.64.1.2"]},
+                    "unrelated": {"HostName": "other", "TailscaleIPs": ["100.64.1.3"]},
+                }},
+            ])
+            released = []
+
+            def invoke(*cmd, **kwargs):
+                if cmd[:2] == ("tailscale", "status"):
+                    return type("Reply", (), {"stdout": json.dumps(next(responses))})()
+                self.assertEqual(cmd[:2], ("sudo", "ssh"))
+                released.append(cmd[2])
+                return type("Reply", (), {"stdout": ""})()
+
+            with mock.patch.object(remote, "invoke", side_effect=invoke), \
+                 mock.patch.object(remote.time, "sleep") as sleep:
+                remote.stop(args)
+            sleep.assert_called_once_with(3)
+            self.assertEqual(released, ["runner@100.64.1.1", "runner@100.64.1.2"])
+
+    def test_unclaimed_worker_expires_without_waiting_full_build_timeout(self):
+        args = type("Args", (), {
+            "timeout": 1800, "startup_timeout": 1,
+        })()
+        with mock.patch.object(remote.Path, "is_file", return_value=False), \
+             mock.patch.object(remote.time, "monotonic",
+                               side_effect=[0, 0, 0, 2]):
+            with self.assertRaisesRegex(RuntimeError, "unclaimed.*expired"):
+                remote.hold(args)
+
     def test_matrix_outputs_json_for_job_matrix(self):
         with redirect_stdout(io.StringIO()) as buf:
             remote.matrix(type("A", (), {"count": 4})())
@@ -98,10 +177,17 @@ class RemoteBuildersTest(unittest.TestCase):
                     "Result", (), {"stdout": json.dumps(status)})()) as runner, \
                  mock.patch.object(remote, "ssh_config") as sshconf:
                 remote.discover(args)
-            self.assertEqual(runner.call_count, 3)
-            for call in runner.call_args_list[1:]:
-                self.assertEqual(call.args[:3], ("sudo", remote.LOCAL_NIX, "store"))
+            self.assertEqual(runner.call_count, 5)
+            ping = [call for call in runner.call_args_list if
+                    call.args[:3] == ("sudo", remote.LOCAL_NIX, "store")]
+            claims = [call for call in runner.call_args_list if
+                      call.args[:2] == ("sudo", "ssh")]
+            self.assertEqual(len(ping), 2)
+            self.assertEqual(len(claims), 2)
+            for call in ping:
                 self.assertIn("remote-program=", call.args[5])
+            for call in claims:
+                self.assertEqual(call.args[-2:], ("touch", remote.STARTED))
             sshconf.assert_called_once()
             lines = machines.read_text().splitlines()
             self.assertEqual(lines, [
@@ -174,6 +260,7 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("path: ci-plan/", worker)
         self.assertIn("ci-plan/remote-worker.py hostname", worker)
         self.assertIn("ci-plan/remote-worker.py hold", worker)
+        self.assertIn("--startup-timeout 360", worker)
         self.assertNotIn("actions/checkout@", worker)
         self.assertNotIn(".ci-tools/flake-ci/", worker)
         self.assertIn("cachix/install-nix-action@", worker)
@@ -236,6 +323,9 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertIn("cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py", workflow)
         self.assertNotIn("actions/checkout@", test_stage)
         self.assertIn("toJSON(matrix.names)", test_stage)
+        self.assertIn("--run-id \"${{ github.run_id }}\"", coordinator)
+        self.assertIn("--attempt \"${{ github.run_attempt }}\"", coordinator)
+        self.assertIn("--count \"${{ inputs.worker_count }}\"", coordinator)
         self.assertIn("--expected-commit", test_stage)
         self.assertNotIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", test_stage)
         self.assertIn("needs: [plan, worker, coordinator, test]", acceptance)

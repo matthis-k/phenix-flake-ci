@@ -15,6 +15,7 @@ import time
 
 SYSTEMS = {"x86_64-linux", "aarch64-linux"}
 COMPLETION = "/tmp/phenix-flake-ci-finished"
+STARTED = "/tmp/phenix-flake-ci-started"
 # GitHub's non-interactive SSH shells do not source /etc/profile.d/nix.sh.
 # Use the absolute executable installed by cachix/install-nix-action.
 REMOTE_DAEMON = "/nix/var/nix/profiles/default/bin/nix-daemon"
@@ -62,7 +63,13 @@ def hostname(args):
 
 def peers(status):
     result = {}
-    for peer in status.get("Peer", {}).values():
+    # Tailscale can report "Peer": null immediately after a successful
+    # tailscale up, before its first peer snapshot has arrived. This is a
+    # normal not-yet-ready state, not a failed authentication attempt.
+    table = status.get("Peer") if isinstance(status, dict) else None
+    if not isinstance(table, dict):
+        return result
+    for peer in table.values():
         if not isinstance(peer, dict):
             continue
         name = peer.get("HostName")
@@ -123,6 +130,15 @@ def discover(args):
                     print(f"Nix ssh-ng probe failed for {name}: {reason}", flush=True)
                     last_errors[name] = reason
                 continue
+            # Mark the worker as claimed only after proving both the Nix
+            # remote-store protocol and its authenticated SSH control path.
+            # Unclaimed workers self-retire after the bounded startup grace.
+            try:
+                invoke("sudo", "ssh", f"runner@{ip}", "touch", STARTED,
+                       timeout=12)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                print(f"Worker startup lease failed for {name}: {exc}", flush=True)
+                continue
             ready[name] = ip
             print(f"Builder ready: {name}", flush=True)
         if len(ready) != count:
@@ -168,25 +184,56 @@ def build(args):
 
 def stop(args):
     path = Path(args.hosts)
-    if not path.exists():
-        return
-    hosts = json.loads(path.read_text())
+    hosts = json.loads(path.read_text()) if path.exists() else {}
+    if not isinstance(hosts, dict):
+        raise ValueError("invalid remote worker host inventory")
+
+    count = getattr(args, "count", None)
+    expected = (set(worker_name(args.run_id, args.attempt, count, i)
+                    for i in range(1, count + 1)) if count else set())
+    # If discovery aborted before persisting a complete host list, the
+    # already-running workers still need releasing. Resolve their exact
+    # run/attempt identities through the current authenticated tailnet.
+    # This is bounded; never issue SSH to unrelated peers.
+    if expected and not expected.issubset(hosts):
+        deadline = time.monotonic() + positive(args.timeout, 1, 180)
+        while time.monotonic() < deadline and not expected.issubset(hosts):
+            try:
+                visible = peers(json.loads(invoke("tailscale", "status",
+                                                 "--json").stdout))
+                hosts.update({name: visible[name] for name in expected
+                              if name in visible})
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                    json.JSONDecodeError):
+                pass  # transient daemon/bootstrap state; retry below
+            if not expected.issubset(hosts):
+                time.sleep(3)
+
     errors = []
-    for ip in hosts.values():
+    targets = {name: ip for name, ip in hosts.items()
+               if not expected or name in expected}
+    for ip in sorted(set(targets.values())):
         try:
             invoke("sudo", "ssh", f"runner@{ip}", "touch", COMPLETION, timeout=15)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             errors.append(str(exc))
-    if errors:
-        raise RuntimeError(f"could not release {len(errors)} remote workers")
+    missing = sorted(expected - targets.keys())
+    if missing or errors:
+        raise RuntimeError(f"could not release workers: missing={missing}, "
+                           f"ssh_failures={len(errors)}")
 
 
 def hold(args):
     end = time.monotonic() + positive(args.timeout, 1, 3600)
+    startup_end = time.monotonic() + positive(args.startup_timeout, 1, 900)
+    claimed = False
     while time.monotonic() < end:
         if Path(COMPLETION).is_file():
             print("Remote worker released by coordinator")
             return
+        claimed = claimed or Path(STARTED).is_file()
+        if not claimed and time.monotonic() >= startup_end:
+            raise RuntimeError("unclaimed remote worker startup lease expired")
         time.sleep(4)
     raise RuntimeError("coordinator did not release worker before deadline")
 
@@ -226,9 +273,14 @@ def main():
     b.set_defaults(func=build)
     s = sub.add_parser("stop")
     s.add_argument("--hosts", required=True)
+    s.add_argument("--run-id", type=int)
+    s.add_argument("--attempt", type=int)
+    s.add_argument("--count", type=int)
+    s.add_argument("--timeout", type=int, default=45)
     s.set_defaults(func=stop)
     w = sub.add_parser("hold")
     w.add_argument("--timeout", type=int, default=1800)
+    w.add_argument("--startup-timeout", type=int, default=360)
     w.set_defaults(func=hold)
     args = p.parse_args()
     try:
