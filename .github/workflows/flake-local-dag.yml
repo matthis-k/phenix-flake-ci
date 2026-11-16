@@ -53,6 +53,14 @@ jobs:
             --config ci-plan/config.json --output ci-plan/plan.json
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py analyze \
             --plan ci-plan/plan.json --output ci-plan/graph.json
+          # Build-only backends must not silently skip declared runtime tests.
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py plan \
+            --system "$(jq -er .system ci-plan/config.json)" \
+            --output ci-plan/runtime-inventory.json
+          if jq -e '.tests | length > 0' ci-plan/runtime-inventory.json >/dev/null; then
+            echo "::error::Runtime test.* packages require the nix-dag staged or nix-remote backend."
+            exit 1
+          fi
       - name: Restore compatible verified-main Nix store (read-only)
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:

@@ -270,3 +270,14 @@ was redundant. The test stage now imports its NAR without restoring the
 coordinator cache, avoiding duplicate transfer and cache extraction.
 The exact-head gate is unchanged. Actual time savings depend on workload and
 are not inferred from a library-only test.
+
+## Build-only runner compatibility boundary
+
+The older `flake-checks.yml` matrix and standalone
+`flake-local-dag.yml` runners only implement `checks.*` compilation.
+They have no runtime `test.*` handoff or execution gate. To avoid a
+false-green CI result, they now use the **same** flake test-package discovery
+helper at planning time and **reject** any nonempty runtime inventory before
+dispatching builds. Consumers with runtime tests use the fully supported
+`nix-dag` or `nix-remote` backend instead. This is a deliberate
+fail-closed boundary, not a parallel test implementation.
