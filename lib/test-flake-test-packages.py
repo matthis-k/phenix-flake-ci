@@ -339,7 +339,7 @@ else:
                     b"x" * (subject.MAX_RUNTIME_REPORT_BYTES + 1))
                 return subprocess.CompletedProcess(argv, 0)
             with mock.patch.object(subject.subprocess, "run", side_effect=fake_run), mock.patch.object(
-                    subject.subprocess, "check_output", return_value=plan["tests"]["alpha"]["out"]+"\\n"):
+                    subject.subprocess, "check_output", return_value=plan["tests"]["alpha"]["out"]+"\n"):
                 with self.assertRaisesRegex(ValueError, "1 of 1 test packages failed"):
                     subject.batch_command(args)
             result = subject.load(args.results / "alpha" / "evidence.json")
