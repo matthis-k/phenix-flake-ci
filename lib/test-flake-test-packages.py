@@ -62,7 +62,7 @@ class TestPackageTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/flake-dag-staged.yml").read_text()
         plan = workflow.split("  plan:\n", 1)[1].split("  shared:\n", 1)[0]
-        join = workflow.split("  join:\n", 1)[1].split("  test:\n", 1)[0]
+        join = workflow.split("  join:\n", 1)[1].split("  recovery:\n", 1)[0]
         test = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
         gate = workflow.split("  acceptance:\n", 1)[1]
         self.assertIn("flake-test-packages.py plan", plan)
@@ -322,7 +322,7 @@ class TestPackageTests(unittest.TestCase):
              ("PLAN", "WORKERS", "COORDINATOR", "TESTS", "TEST_COUNT",
               "DAG_VERDICT", "RUNTIME_VERDICT")),
             ("flake-dag-staged.yml",
-             ("PLAN", "SHARED", "LEAF", "JOIN", "TESTS", "TEST_COUNT",
+             ("PLAN", "SHARED", "LEAF", "JOIN", "RECOVERY", "TESTS", "TEST_COUNT",
               "RUNTIME_VERDICT")),
         ):
             with self.subTest(workflow=workflow_name):
@@ -337,12 +337,17 @@ class TestPackageTests(unittest.TestCase):
                 script = textwrap.dedent(entry.split("        run: |\n", 1)[1])
                 defaults = {key: "success" for key in stages}
                 defaults.update(TEST_COUNT="2")
+                if "RECOVERY" in stages:
+                    # The normal successful join skips recovery entirely.
+                    defaults["RECOVERY"] = "skipped"
                 with tempfile.TemporaryDirectory() as folder:
                     summary = Path(folder) / "summary.md"
                     for overrides, expected_code in (
                         ({}, 0),
                         ({"COORDINATOR": "failure"}, 1),
                         ({"JOIN": "failure"}, 1),
+                        ({"JOIN": "failure", "RECOVERY": "success"}, 1),
+                        ({"RECOVERY": "success"}, 1),
                         ({"RUNTIME_VERDICT": "failure"}, 1),
                         ({"TESTS": "failure"}, 1),
                         ({"TEST_COUNT": "0", "TESTS": "skipped"}, 0),
