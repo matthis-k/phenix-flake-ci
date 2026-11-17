@@ -410,10 +410,27 @@ def batch_command(args):
     available = (read_availability(plan, args.available)
                  if getattr(args, "available", None) else set(names))
     runnable = [name for name in names if name in available]
-    prepare_execution(plan, runnable, args)
+    # Validate the run identity and import the shared archive once. A single
+    # missing Nix output must not prevent independent siblings from executing.
+    prepare_execution(plan, [], args)
+    verified = set()
+    if runnable:
+        try:
+            verify_outputs(plan, runnable)
+            verified.update(runnable)
+        except (subprocess.CalledProcessError, ValueError):
+            # The fast-path batch lookup failed. Probe each planned root without
+            # rebuilding: an unavailable package is blocked, not a global abort.
+            for name in runnable:
+                try:
+                    verify_outputs(plan, [name])
+                    verified.add(name)
+                except (subprocess.CalledProcessError, ValueError) as error:
+                    print(f"BLOCKED: runtime output for {name}: {error}",
+                          file=sys.stderr)
     failures = []
     for name in names:
-        if name not in available:
+        if name not in verified:
             blocked_case(plan, name, Path(args.results) / name / "evidence.json")
             failures.append(name)
             continue
