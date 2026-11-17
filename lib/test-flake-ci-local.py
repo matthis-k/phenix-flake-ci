@@ -117,6 +117,40 @@ class LocalCITests(unittest.TestCase):
             self.assertIn(("flake-test-packages.py", "verify"), calls)
             self.assertNotIn(("flake-check-dag.py", "verify"), calls)
 
+    def test_failed_dag_evidence_still_runs_runtime_and_never_passes(self):
+        # A successful Nix invocation does not imply acceptable check
+        # evidence. Runtime tests still run for diagnostic completeness.
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+
+            def check_output(argv, **kwargs):
+                if argv[1:3] == ["rev-parse", "--show-toplevel"]:
+                    return str(Path.cwd())
+                if argv[1:3] == ["status", "--porcelain"]:
+                    return ""
+                if argv[:3] == ["nix", "eval", "--json"]:
+                    return '{"schemaVersion":1,"system":"x86_64-linux"}'
+                raise AssertionError(argv)
+
+            def run(script, *args):
+                args = list(map(str, args))
+                calls.append((script, args[0]))
+                if script == "flake-test-packages.py" and args[0] == "plan":
+                    Path(args[args.index("--output") + 1]).write_text(
+                        json.dumps({"tests": {"rpc": {}}}))
+                if script == "flake-check-dag.py" and args[0] == "verify":
+                    raise subprocess.CalledProcessError(2, ["verify"])
+
+            with mock.patch.object(local.subprocess, "check_output",
+                                   side_effect=check_output), mock.patch.object(
+                                       local, "command", side_effect=run):
+                with self.assertRaisesRegex(ValueError, "incomplete build"):
+                    local.run(self.args(directory))
+            self.assertLess(calls.index(("flake-check-dag.py", "verify")),
+                            calls.index(("flake-test-packages.py", "batch")))
+            self.assertIn(("flake-test-packages.py", "probe"), calls)
+            self.assertIn(("flake-test-packages.py", "verify"), calls)
+
     def test_no_runtime_cases_skips_handoff(self):
         with tempfile.TemporaryDirectory() as directory:
             calls = self.harness(self.args(directory), [])
