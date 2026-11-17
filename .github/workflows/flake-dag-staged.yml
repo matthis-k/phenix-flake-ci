@@ -371,8 +371,20 @@ jobs:
               --output dag-test-closure/closure.nar
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
+            # All packages are unavailable: write exact-head blocked records
+            # once here, instead of launching an empty matrix of runners.
+            python3 .ci-tools/flake-ci/lib/flake-test-packages.py all-blocked \
+              --plan ci-plan/test-packages.json \
+              --available dag-test-closure/available.json \
+              --results dag-blocked-result/
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() && steps.ready.outputs.ready == 'false' }}
+        with:
+          name: dag-runnable-test-recovery-blocked
+          path: dag-blocked-result/
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ !cancelled() && steps.ready.outputs.ready == 'true' }}
         with:

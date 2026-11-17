@@ -398,6 +398,25 @@ def blocked_case(plan, name, path):
           file=sys.stderr)
 
 
+def all_blocked_command(args):
+    """Publish exact-head blocked evidence without spawning empty test jobs.
+
+    Valid only when a successful probe proves *no* planned package is runnable.
+    This never accepts a test as passing: the final verifier rejects every
+    blocked record, and a failed DAG join remains a required failing job.
+    """
+    plan = validate(load(args.plan))
+    verify_head(plan)
+    if not plan["tests"]:
+        raise ValueError("no runnable test packages to mark blocked")
+    if read_availability(plan, args.available):
+        raise ValueError("cannot mark all runtime packages blocked when some are available")
+    for name in sorted(plan["tests"]):
+        blocked_case(plan, name, Path(args.results) / name / "evidence.json")
+    print(f"Recorded {len(plan['tests'])} blocked exact-head test packages "
+          "without starting any artifact-only test runners")
+
+
 def batch_command(args):
     plan = validate(load(args.plan))
     try:
@@ -589,6 +608,11 @@ def main():
     d.add_argument("--plan", required=True)
     d.add_argument("--results", required=True)
     d.set_defaults(func=verify_command)
+    blocked = subs.add_parser("all-blocked")
+    blocked.add_argument("--plan", required=True)
+    blocked.add_argument("--available", required=True)
+    blocked.add_argument("--results", required=True)
+    blocked.set_defaults(func=all_blocked_command)
     probe = subs.add_parser("probe")
     probe.add_argument("--plan", required=True)
     probe.add_argument("--output", required=True)

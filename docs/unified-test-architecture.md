@@ -228,6 +228,11 @@ independent checks. Where runtime packages were successfully realized, the
 fallback exports just those packages and runs the existing artifact-only test
 batches. Missing packages are recorded as blocked; the final acceptance job
 still fails on the original broken join, regardless of fallback success.
+If none of the packages built successfully, the recovery coordinator itself
+writes one strict, exact-head blocked evidence record per test and uploads
+these for the normal final verifier. It does not start empty GitHub test
+runners or invent passing results. Partial availability still uses the
+existing artifact-only runtime matrix, which continues independent cases.
 Before the failed-only fallback build, completed leaf archives from the same
 GitHub run are imported when their exact-head shard evidence and offline Nix
 outputs validate. Missing, stale or invalid leaf artifacts are skipped one
