@@ -109,7 +109,14 @@ def graph_summary(plan, raw):
         for dependency in parents[drv]:
             inherited |= reachable[dependency]
         if drv in checks_at_drv:
-            upstream = [name for name in names if inherited & bits[name]]
+            # Enumerate only the reachable named checks. Scanning every
+            # check here makes a wide graph of independent roots O(C^2).
+            upstream = []
+            remaining = inherited
+            while remaining:
+                bit = remaining & -remaining
+                upstream.append(names[bit.bit_length() - 1])
+                remaining ^= bit
             rank = max((waves[name] + 1 for name in upstream), default=0)
             # Two named checks can refer to one derivation; neither depends on
             # the other, yet both inherit the same actual upstream checks.
