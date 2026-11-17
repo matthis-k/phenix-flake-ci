@@ -13,8 +13,8 @@ let
     libraryRef = phenix-flake-ci.rev;
   };
 in {
-  apps.${system} = ci.apps;
-  packages.${system} = ci.packages;
+  apps.${system} = existingApps // ci.apps;
+  packages.${system} = existingPackages // ci.packages;
   # Existing checks.${system} and packages.${system}."test.*" are unchanged.
 }
 ```
@@ -65,5 +65,7 @@ Trusted GitHub may continue using Tailscale `ssh-ng` remote Nix builders; untrus
 - Worker credentials, SSH ACLs, cache publication, and remote resources remain existing external configuration.
 
 ## Migration
+
+Merge the generated app/package outputs into existing flake outputs; never replace the consumer's `test.*` packages or other packages.
 
 Adopt incrementally. First generate the workflows and assert they match the existing rendered output. Then expose `apps.ci`. Never change check definitions, the GitHub backend, or the final evidence gate as part of this facade cutover. No Phenix-AI PR stack rebase is required.
