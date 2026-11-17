@@ -217,6 +217,20 @@ other cases, and the final acceptance gate rejects missing, repeated, stale,
 or failed case evidence. The existing single-case `run` command remains
 available for jobs requiring independent runner isolation, not as a legacy shim.
 
+## Staged DAG failure recovery
+
+On a successful untrusted staged DAG join, no recovery job is scheduled. If
+that join fails, the fallback submits **all planned Nix check roots and runnable
+test package roots together** to the existing native DAG builder with Nix
+`--keep-going`. This also applies to projects without executable runtime
+tests, so a failed fan-out shard cannot suppress diagnostics from otherwise
+independent checks. Where runtime packages were successfully realized, the
+fallback exports just those packages and runs the existing artifact-only test
+batches. Missing packages are recorded as blocked; the final acceptance job
+still fails on the original broken join, regardless of fallback success.
+The fallback can repeat some work from failed leaf jobs; it incurs no additional
+compilation on the successful path.
+
 ## Per-case workspace discipline
 
 Every direct runtime executable, including a generic third-party package,

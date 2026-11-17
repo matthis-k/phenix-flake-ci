@@ -291,9 +291,9 @@ jobs:
           if-no-files-found: error
 
   recovery:
-    name: Recover independent runtime packages after failed DAG join
+    name: Recover independent Nix roots after failed DAG join
     needs: [plan, join]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.join.result != 'success' && needs.plan.outputs.test_count != '0' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.join.result != 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -326,16 +326,18 @@ jobs:
           restore-prefixes-first-match: |
             ${{ needs.plan.outputs.cache_prefix }}-
           save: false
-      - name: Attempt every independent test package build
+      - name: Attempt all Nix check and runtime roots in one keep-going graph
         id: build
         continue-on-error: true
         run: |
-          python3 .ci-tools/flake-ci/lib/flake-test-packages.py build \
-            --plan ci-plan/test-packages.json \
-            --root "${RUNNER_TEMP}/phenix-dag-recovery-roots"
+          python3 .ci-tools/flake-ci/lib/flake-check-dag.py build \
+            --plan ci-plan/plan.json --graph ci-plan/graph.json \
+            --test-packages ci-plan/test-packages.json \
+            --test-root "${RUNNER_TEMP}/phenix-dag-recovery-roots" \
+            --output dag-recovery/evidence.json
       - name: Probe and export independently successful package outputs
         id: ready
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.plan.outputs.test_count != '0' }}
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           TEST_COUNT: ${{ needs.plan.outputs.test_count }}

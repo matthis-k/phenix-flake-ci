@@ -314,6 +314,43 @@ class DagTests(unittest.TestCase):
                     dag.build_command(args)
                 should_not_build.assert_not_called()
 
+    def test_failed_full_graph_still_requests_all_checks_and_runtime_roots(self):
+        # The failure-only staged backend uses this same native DAG builder.
+        # On nonzero Nix exit every independent check and executable package
+        # must have been submitted, with no forged passing evidence.
+        import hashlib
+        plan = mkplan()
+        graph = dag.graph_summary(plan, mkgraph())
+        item = {"drv": drv("r", "rpc"), "out": output("r", "rpc"),
+                "exe": output("r", "rpc") + "/bin/test-rpc"}
+        test_plan = {"schemaVersion": 2, "commit": SHA,
+                     "system": plan["system"], "tests": {"rpc": item}}
+        test_plan["digest"] = hashlib.sha256(json.dumps(
+            test_plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dag.save(root / "plan.json", plan)
+            dag.save(root / "graph.json", graph)
+            dag.save(root / "tests.json", test_plan)
+            args = type("Args", (), {
+                "plan": root / "plan.json", "graph": root / "graph.json",
+                "test_packages": root / "tests.json",
+                "test_root": root / "test-roots",
+                "output": root / "recovery-evidence.json",
+            })()
+            with mock.patch.object(dag.planner, "run_command", return_value=SHA), \
+                 mock.patch.object(dag.subprocess, "check_output",
+                                   side_effect=subprocess.CalledProcessError(
+                                       100, ["nix", "build"])) as build:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    dag.build_command(args)
+            invocation = build.call_args.args[0]
+            self.assertIn("--keep-going", invocation)
+            for name in plan["checks"]:
+                self.assertIn(f".#checks.{plan['system']}.{name}", invocation)
+            self.assertIn('.#packages.x86_64-linux."test.rpc"', invocation)
+            self.assertFalse(args.output.exists())
+
     def test_failed_nix_graph_propagates_failure_after_keep_going(self):
         # Nix owns scheduling; the command is nonzero only after attempting
         # every independent root. Never synthesize passing check evidence.
