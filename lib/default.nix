@@ -4,6 +4,7 @@ let
   mkFlakeCheckConfig = import ./mk-flake-check-config.nix;
   mkFlakeCiWorkflow = import ./mk-flake-ci-workflow.nix;
   mkFlakeCiWorkflows = import ./mk-flake-ci-workflows.nix;
+  mkFlakeCI = import ./mk-flake-ci.nix;
   mkCargoTestPackage = import ./mk-cargo-test-package.nix;
   mkTest = import ./mk-test.nix;
   mkSuite = import ./mk-test-suite.nix;
@@ -109,7 +110,7 @@ let
 in
 {
   version = "0.14.0";
-  tests = (import ./tests.nix) // (import ./test-api-tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix) // (import ./flake-ci-workflows-tests.nix);
+  tests = (import ./tests.nix) // (import ./test-api-tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix) // (import ./flake-ci-workflows-tests.nix) // (import ./flake-ci-facade-tests.nix);
   inherit
     ciSchemaVersion
     maintenanceCommandGraph
@@ -122,6 +123,7 @@ in
     mkFlakeCheckConfig
     mkFlakeCiWorkflow
     mkFlakeCiWorkflows
+    mkFlakeCI
     mkCargoTestPackage
     mkCargoTestPackages
     mkCargoDependencyChecks

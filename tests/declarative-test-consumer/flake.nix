@@ -67,6 +67,12 @@
             client.sendall(b"ping")
             print(client.recv(1024).decode())
       '';
+      # The same Nix-defined inventory powers local parity without a second
+      # test registry or command implementation.
+      localCI = ciLib.mkFlakeCI {
+        inherit pkgs;
+        config = import ./ci/flake-check-config.nix;
+      };
       suite = ciLib.mkSuite {
         inherit pkgs;
         defaults = {
@@ -90,6 +96,7 @@
       };
     in
     {
+      apps.${system} = localCI.apps;
       checks.${system} = {
         # The check name is deliberately a literal attribute containing both
         # a dot and a plus. Every CI backend must address this one attribute.
@@ -201,7 +208,7 @@
       });
       # Deliberately failing derivation used solely to prove that failed
       # assertions cause nix build to fail. Not part of the required checks.
-      packages.${system} = {
+      packages.${system} = localCI.packages // {
         "test.rpc" = suite.packages."test.rpc";
         "test.rpc-repeat" = suite.packages."test.rpc-repeat";
         assertion-fails = ciLib.mkTest {
