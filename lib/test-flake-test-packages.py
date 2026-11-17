@@ -131,6 +131,12 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn("continue-on-error: true", recovery)
         self.assertIn("flake-test-packages.py probe", recovery)
         self.assertIn("flake-test-packages.py export", recovery)
+        self.assertIn("flake-test-packages.py all-blocked", recovery)
+        self.assertIn("name: dag-runnable-test-recovery-blocked", recovery)
+        self.assertIn("path: dag-blocked-result/", recovery)
+        self.assertIn("if-no-files-found: error", recovery)
+        self.assertIn('echo "ready=false" >> "$GITHUB_OUTPUT"', recovery)
+        self.assertIn("pattern: dag-runnable-test-*", gate)
         self.assertIn("--available dag-test-closure/available.json", recovery)
         self.assertIn("runtime_ready: ${{ steps.ready.outputs.ready }}", recovery)
         self.assertIn("save: false", recovery)
@@ -207,6 +213,69 @@ class TestPackageTests(unittest.TestCase):
                 subject.save(manifest, mutation)
                 with self.assertRaisesRegex(ValueError, "invalid|stale"):
                     subject.read_availability(plan, manifest)
+
+    def test_all_blocked_records_full_evidence_without_runner_or_nix(self):
+        plan = test_plan(**{name: test_item(name) for name in
+                            ("alpha", "beta", "gamma")})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subject.save(root / "plan.json", plan)
+            availability = root / "available.json"
+            subject.save(availability, subject.availability_plan(plan, []))
+            args = type("Args", (), {"plan": root / "plan.json",
+                                      "available": availability,
+                                      "results": root / "results"})()
+            with mock.patch.object(subject, "git_head", return_value=C), \
+                 mock.patch.object(subject.subprocess, "run") as no_nix, \
+                 mock.patch.object(subject.subprocess, "check_output") as no_query:
+                subject.all_blocked_command(args)
+                no_nix.assert_not_called()
+                no_query.assert_not_called()
+            self.assertEqual(sorted(path.parent.name for path in
+                             args.results.rglob("evidence.json")),
+                             ["alpha", "beta", "gamma"])
+            self.assertTrue(all(subject.load(
+                args.results / name / "evidence.json")["status"] == "blocked"
+                for name in plan["tests"]))
+            with self.assertRaises(ValueError) as error:
+                subject.verify_command(type("Args", (), {
+                    "plan": args.plan, "results": args.results})())
+            report = str(error.exception)
+            for name in ("alpha", "beta", "gamma"):
+                self.assertIn("blocked test package " + name, report)
+            # Never allow the fallback to manufacture blocked records when
+            # even one case can still run independently.
+            subject.save(availability, subject.availability_plan(plan, ["beta"]))
+            with mock.patch.object(subject, "git_head", return_value=C):
+                with self.assertRaisesRegex(ValueError, "some are available"):
+                    subject.all_blocked_command(args)
+            subject.save(availability, subject.availability_plan(plan, []))
+            tampered = subject.load(availability)
+            tampered["digest"] = "f" * 64
+            subject.save(availability, tampered)
+            with mock.patch.object(subject, "git_head", return_value=C):
+                with self.assertRaisesRegex(ValueError, "stale or invalid"):
+                    subject.all_blocked_command(args)
+
+    def test_all_blocked_rejects_foreign_commit_and_empty_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = test_plan(alpha=test_item("alpha"))
+            subject.save(root / "plan.json", plan)
+            subject.save(root / "available.json", subject.availability_plan(plan, []))
+            args = type("Args", (), {"plan": root / "plan.json",
+                                      "available": root / "available.json",
+                                      "results": root / "results"})()
+            with mock.patch.object(subject, "git_head", return_value="b" * 40):
+                with self.assertRaisesRegex(ValueError, "exact head"):
+                    subject.all_blocked_command(args)
+            self.assertFalse(args.results.exists())
+            empty = test_plan()
+            subject.save(args.plan, empty)
+            subject.save(args.available, subject.availability_plan(empty, []))
+            with mock.patch.object(subject, "git_head", return_value=C):
+                with self.assertRaisesRegex(ValueError, "no runnable"):
+                    subject.all_blocked_command(args)
 
     def test_partial_runtime_batch_runs_siblings_and_never_passes_blocked_test(self):
         plan = test_plan(**{n: test_item(n) for n in ("alpha", "beta", "gamma")})
