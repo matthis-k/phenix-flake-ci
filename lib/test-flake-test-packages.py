@@ -118,6 +118,11 @@ class TestPackageTests(unittest.TestCase):
         self.assertNotIn("needs.plan.outputs.test_count", recovery.split("    steps:", 1)[0])
         self.assertIn("if: ${{ !cancelled() && needs.plan.outputs.test_count != '0' }}", recovery)
         self.assertIn("flake-check-dag.py build", recovery)
+        self.assertIn("flake-dag-stages.py recover-leaves", recovery)
+        self.assertIn("pattern: dag-leaf-*", recovery)
+        self.assertIn("continue-on-error: true", recovery)
+        self.assertLess(recovery.index("recover-leaves"),
+                        recovery.index("flake-check-dag.py build"))
         self.assertIn("--plan ci-plan/plan.json", recovery)
         self.assertIn("--graph ci-plan/graph.json", recovery)
         self.assertIn("--test-packages ci-plan/test-packages.json", recovery)

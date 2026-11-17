@@ -185,6 +185,84 @@ class StagedDagTests(unittest.TestCase):
                              ["nix-store", "--export", store("a", "model")])
             self.assertTrue(file.exists())
 
+    def test_failed_recovery_imports_only_complete_valid_leaf_artifacts(self):
+        plan, graph = sample()
+        manifest = stages.partition(plan, graph)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename, value in (("plan.json", plan), ("graph.json", graph),
+                                    ("stages.json", manifest)):
+                stages.save(root / filename, value)
+            leaves = root / "leaves"
+            for shard in manifest["shards"]:
+                role = shard["id"]
+                leaf = leaves / ("dag-leaf-" + role)
+                proof = stages.evidence(plan, manifest, role, {
+                    name: {"drv": plan["checks"][name], "status": "pass",
+                           "outputs": [store("x", name)]}
+                    for name in shard["checks"]
+                })
+                proof["exportedPaths"] = [store("x", name) for name in shard["checks"]]
+                stages.save(leaf / "evidence.json", proof)
+                (leaf / "store.nar").write_bytes(b"fake export archive")
+            bad_role = manifest["shards"][-1]["id"]
+            broken = leaves / ("dag-leaf-" + bad_role) / "evidence.json"
+            forged = stages.load(broken)
+            forged["commit"] = "b" * 40
+            stages.save(broken, forged)
+            args = type("Args", (), {
+                "plan": root / "plan.json", "graph": root / "graph.json",
+                "stages": root / "stages.json", "leaves": leaves,
+                "output": root / "reused.json",
+            })()
+            good = manifest["shards"][0]
+            outputs = sorted(store("x", name) for name in good["checks"])
+            with mock.patch.object(stages, "ensure_commit"), \
+                 mock.patch.object(stages.subprocess, "run") as imports, \
+                 mock.patch.object(stages.planner, "run_command",
+                                   return_value="\n".join(outputs)) as store_query:
+                stages.recover_leaves_command(args)
+            report = stages.load(args.output)
+            self.assertEqual(report["reusedShards"], [good["id"]])
+            self.assertEqual(report["skippedShards"], [bad_role])
+            imports.assert_called_once()
+            self.assertEqual(imports.call_args.args[0], ["nix-store", "--import"])
+            store_query.assert_called_once_with(
+                ["nix", "path-info", "--offline", *outputs])
+
+    def test_recovery_missing_or_incomplete_artifacts_never_abort_siblings(self):
+        plan, graph = sample()
+        manifest = stages.partition(plan, graph)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename, value in (("plan.json", plan), ("graph.json", graph),
+                                    ("stages.json", manifest)):
+                stages.save(root / filename, value)
+            leaves = root / "missing-artifacts"
+            args = type("Args", (), {
+                "plan": root / "plan.json", "graph": root / "graph.json",
+                "stages": root / "stages.json", "leaves": leaves,
+                "output": root / "reused.json",
+            })()
+            with mock.patch.object(stages, "ensure_commit"), \
+                 mock.patch.object(stages.subprocess, "run") as imports:
+                stages.recover_leaves_command(args)
+                imports.assert_not_called()
+                self.assertEqual(stages.load(args.output)["reusedShards"], [])
+                shard = manifest["shards"][0]
+                leaf = leaves / ("dag-leaf-" + shard["id"])
+                proof = stages.evidence(plan, manifest, shard["id"], {
+                    name: {"drv": plan["checks"][name], "status": "pass",
+                           "outputs": [store("x", name)]}
+                    for name in shard["checks"]
+                })
+                proof["exportedPaths"] = [store("x", name) for name in shard["checks"]]
+                stages.save(leaf / "evidence.json", proof)
+                (leaf / "store.nar").write_bytes(b"")
+                stages.recover_leaves_command(args)
+                imports.assert_not_called()
+                self.assertEqual(stages.load(args.output)["reusedShards"], [])
+
     def test_all_leaf_evidence_must_match_exact_checkout_plan(self):
         plan, graph = sample()
         manifest = stages.partition(plan, graph)
