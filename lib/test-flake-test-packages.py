@@ -246,14 +246,16 @@ class TestPackageTests(unittest.TestCase):
             # Never allow the fallback to manufacture blocked records when
             # even one case can still run independently.
             subject.save(availability, subject.availability_plan(plan, ["beta"]))
-            with self.assertRaisesRegex(ValueError, "some are available"):
-                subject.all_blocked_command(args)
+            with mock.patch.object(subject, "git_head", return_value=C):
+                with self.assertRaisesRegex(ValueError, "some are available"):
+                    subject.all_blocked_command(args)
             subject.save(availability, subject.availability_plan(plan, []))
             tampered = subject.load(availability)
             tampered["digest"] = "f" * 64
             subject.save(availability, tampered)
-            with self.assertRaisesRegex(ValueError, "stale or invalid"):
-                subject.all_blocked_command(args)
+            with mock.patch.object(subject, "git_head", return_value=C):
+                with self.assertRaisesRegex(ValueError, "stale or invalid"):
+                    subject.all_blocked_command(args)
 
     def test_all_blocked_rejects_foreign_commit_and_empty_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
