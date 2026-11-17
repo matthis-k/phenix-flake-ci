@@ -330,22 +330,6 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every matrix worker and full coordinator success
-        env:
-          PLAN: ${{ needs.plan.result }}
-          WORKERS: ${{ needs.worker.result }}
-          COORDINATOR: ${{ needs.coordinator.result }}
-          TESTS: ${{ needs.test.result }}
-          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
-        run: |
-          test "$PLAN" = success
-          test "$WORKERS" = success
-          test "$COORDINATOR" = success
-          if [ "$TEST_COUNT" = 0 ]; then
-            test "$TESTS" = skipped
-          else
-            test "$TESTS" = success
-          fi
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: matthis-k/phenix-flake-ci
@@ -353,24 +337,67 @@ jobs:
           path: .ci-tools/flake-ci
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ !cancelled() }}
         with:
           name: remote-nix-plan-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-plan/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ !cancelled() }}
         with:
           name: remote-nix-evidence-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: ci-result/
       - name: Independently verify all check outputs and commit identity
+        id: verify_dag
+        if: ${{ !cancelled() }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-check-dag.py verify \
             --plan ci-plan/plan.json --graph ci-plan/graph.json \
             --evidence ci-result/evidence.json
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: needs.plan.outputs.test_count != '0'
+        if: ${{ !cancelled() && needs.plan.outputs.test_count != '0' }}
         with:
           pattern: runnable-test-*-${{ inputs.worker_count }}${{ inputs.artifact_namespace && format('-{0}', inputs.artifact_namespace) || '' }}
           path: runnable-evidence/
       - name: Require every discovered executable test package to pass
+        id: verify_runtime
+        if: ${{ !cancelled() }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
             --plan ci-plan/test-packages.json --results runnable-evidence
+      - name: Summarize upstream jobs and enforce final acceptance
+        if: ${{ !cancelled() }}
+        env:
+          PLAN: ${{ needs.plan.result }}
+          WORKERS: ${{ needs.worker.result }}
+          COORDINATOR: ${{ needs.coordinator.result }}
+          TESTS: ${{ needs.test.result }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
+          DAG_VERDICT: ${{ steps.verify_dag.outcome }}
+          RUNTIME_VERDICT: ${{ steps.verify_runtime.outcome }}
+        run: |
+          failed=0
+          test "$PLAN" = success || failed=1
+          test "$WORKERS" = success || failed=1
+          test "$COORDINATOR" = success || failed=1
+          if [ "$TEST_COUNT" = 0 ]; then
+            test "$TESTS" = skipped || failed=1
+          else
+            test "$TESTS" = success || failed=1
+          fi
+          test "$DAG_VERDICT" = success || failed=1
+          test "$RUNTIME_VERDICT" = success || failed=1
+          {
+            echo "### Exact-head CI acceptance"
+            echo "| Required stage | Outcome |"
+            echo "| --- | --- |"
+            echo "| plan | $PLAN |"
+            echo "| workers | $WORKERS |"
+            echo "| coordinator | $COORDINATOR |"
+            echo "| tests | $TESTS |"
+            echo "| check evidence | $DAG_VERDICT |"
+            echo "| runtime evidence | $RUNTIME_VERDICT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Required CI jobs or exact-head evidence checks did not all pass"
+            exit 1
+          fi
