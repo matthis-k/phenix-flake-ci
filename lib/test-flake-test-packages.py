@@ -97,7 +97,7 @@ class TestPackageTests(unittest.TestCase):
         self.assertNotIn("nix build", test)
         for forbidden in ("TS_OAUTH", "id-token: write", "secrets: inherit"):
             self.assertNotIn(forbidden, test)
-        self.assertIn("needs: [plan, shared, leaf, join, test]", gate)
+        self.assertIn("needs: [plan, shared, leaf, join, recovery, test]", gate)
         self.assertIn("flake-test-packages.py verify", gate)
         self.assertLess(gate.index("flake-test-packages.py verify"),
                         gate.index("Summarize upstream jobs and enforce final acceptance"))
