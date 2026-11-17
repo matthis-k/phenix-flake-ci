@@ -157,6 +157,16 @@ jobs:
           test -s "$test_package/cargo-tests.json"
           test -d "$test_package/libexec"
 
+      - name: Build and run automatically generated per-crate Rust tests
+        run: |
+          set -euo pipefail
+          fixture="./tests/cargo-test-consumer#packages.x86_64-linux.\"test.rust-generic-cargo-test-fixture\""
+          nix build --no-write-lock-file --no-link "$fixture"
+          nix run --no-write-lock-file "$fixture"
+          # Cargo discovers targets while compiling; the runtime package must
+          # only run the precompiled suite, including after entering offline mode.
+          nix run --no-write-lock-file --offline --no-substitute --max-jobs 0 "$fixture" -- --list
+
       - name: Prove shared Cargo dependency compilation and isolated crate failures
         run: |
           set -euo pipefail

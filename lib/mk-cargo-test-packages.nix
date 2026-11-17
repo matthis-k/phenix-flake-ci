@@ -5,8 +5,15 @@
   pkgs,
   src,
   lockFile,
+  # Optional explicit Cargo names avoid re-parsing workspace membership.
+  # Cargo itself validates that each selected package actually exists.
+  packages ? null,
   compiledName ? "cargo-workspace-tests",
-  cargoArgs ? [ "--workspace" "--all-targets" ],
+  cargoArgs ? (
+    if packages == null then [ "--workspace" "--all-targets" ]
+    else builtins.concatLists (map (name: [ "--package" name ]) packages)
+      ++ [ "--all-targets" ]
+  ),
 }:
 let
   inherit (pkgs) lib;
@@ -46,7 +53,7 @@ let
     !(builtins.elem path exclude)
     && builtins.pathExists "${src}/${path}/Cargo.toml"
   ) memberPaths;
-  names = map (path:
+  workspaceNames = map (path:
     let
       file = builtins.fromTOML (builtins.readFile "${src}/${path}/Cargo.toml");
       name = file.package.name or null;
@@ -57,13 +64,19 @@ let
     else
       name
   ) includedPaths;
-  uniqueNames = lib.unique names;
+  names = if packages == null then workspaceNames else packages;
+  uniqueNames = if builtins.isList names then lib.unique names else [ ];
+  validName = name:
+    builtins.isString name
+    && builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" name != null;
   compiled = import ./mk-cargo-test-package.nix {
     inherit pkgs src lockFile cargoArgs;
     name = compiledName;
   };
 in
-if uniqueNames == [ ] || builtins.length uniqueNames != builtins.length names then
+if !builtins.isList names || uniqueNames == [ ]
+   || !builtins.all validName uniqueNames
+   || builtins.length uniqueNames != builtins.length names then
   throw "phenix-flake-ci: Cargo workspace has no valid unique test packages"
 else
   builtins.listToAttrs (map (package: {
