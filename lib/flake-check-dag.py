@@ -83,13 +83,14 @@ def graph_summary(plan, raw):
 
     checks = plan["checks"]
     names = sorted(checks)
-    bits = {name: 1 << index for index, name in enumerate(names)}
     checks_at_drv = {}
     named_bits = {}
-    for name in names:
+    for index, name in enumerate(names):
         drv = checks[name]
         checks_at_drv.setdefault(drv, []).append(name)
-        named_bits[drv] = named_bits.get(drv, 0) | bits[name]
+        # Construct bits once per root; retaining a mask for every name makes
+        # the allocation quadratic even when all checks are independent.
+        named_bits[drv] = named_bits.get(drv, 0) | (1 << index)
 
     consumers = {drv: [] for drv in parents}
     pending = {drv: len(dependencies) for drv, dependencies in parents.items()}
