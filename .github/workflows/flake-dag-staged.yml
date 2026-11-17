@@ -370,7 +370,6 @@ jobs:
           JOIN: ${{ needs.join.result }}
           TESTS: ${{ needs.test.result }}
           TEST_COUNT: ${{ needs.plan.outputs.test_count }}
-          DAG_VERDICT: ${{ steps.verify_dag.outcome }}
           RUNTIME_VERDICT: ${{ steps.verify_runtime.outcome }}
         run: |
           failed=0

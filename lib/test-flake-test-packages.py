@@ -278,6 +278,54 @@ class TestPackageTests(unittest.TestCase):
         self.assertIn('test "$COORDINATOR" = success', final)
         self.assertIn("flake-test-packages.py verify", final)
 
+    def test_acceptance_verdicts_execute_independently_and_fail_closed(self):
+        # Exercise the actual generated gate scripts, not just substrings.
+        # A failed coordinator or a failed verifier must never be green.
+        import textwrap
+        for workflow_name, stages in (
+            ("flake-nix-builders.yml",
+             ("PLAN", "WORKERS", "COORDINATOR", "TESTS", "TEST_COUNT",
+              "DAG_VERDICT", "RUNTIME_VERDICT")),
+            ("flake-dag-staged.yml",
+             ("PLAN", "SHARED", "LEAF", "JOIN", "TESTS", "TEST_COUNT",
+              "RUNTIME_VERDICT")),
+        ):
+            with self.subTest(workflow=workflow_name):
+                workflow = (Path(__file__).resolve().parents[1] /
+                            ".github/workflows" / workflow_name).read_text()
+                acceptance = workflow.split("  acceptance:\\n", 1)[1]
+                self.assertLess(
+                    acceptance.index("flake-test-packages.py verify"),
+                    acceptance.index("Summarize upstream jobs and enforce final acceptance"))
+                entry = acceptance.split(
+                    "      - name: Summarize upstream jobs and enforce final acceptance\\n", 1)[1]
+                script = textwrap.dedent(entry.split("        run: |\\n", 1)[1])
+                defaults = {key: "success" for key in stages}
+                defaults.update(TEST_COUNT="2")
+                with tempfile.TemporaryDirectory() as folder:
+                    summary = Path(folder) / "summary.md"
+                    for overrides, expected_code in (
+                        ({}, 0),
+                        ({"COORDINATOR": "failure"}, 1),
+                        ({"JOIN": "failure"}, 1),
+                        ({"RUNTIME_VERDICT": "failure"}, 1),
+                        ({"TESTS": "failure"}, 1),
+                        ({"TEST_COUNT": "0", "TESTS": "skipped"}, 0),
+                        ({"TEST_COUNT": "0", "TESTS": "success"}, 1),
+                    ):
+                        if any(key not in stages for key in overrides):
+                            continue
+                        with self.subTest(overrides=overrides):
+                            values = {**defaults, **overrides}
+                            result = subprocess.run(
+                                ["bash", "-e", "-c", script],
+                                env={**os.environ, **values,
+                                     "GITHUB_STEP_SUMMARY": str(summary)},
+                                capture_output=True, text=True)
+                            self.assertEqual(result.returncode, expected_code,
+                                             result.stderr + result.stdout)
+                    self.assertIn("Exact-head CI acceptance", summary.read_text())
+
     def test_batch_imports_closure_once_and_retains_individual_failure_evidence(self):
         plan = test_plan(**{name: test_item(name) for name in ("alpha", "beta", "gamma")})
         with tempfile.TemporaryDirectory() as directory:
