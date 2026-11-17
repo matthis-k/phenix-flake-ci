@@ -81,8 +81,15 @@ def run(args):
         print("Build graph failed; probing independent runtime artifacts",
               file=sys.stderr)
     if not build_failed:
-        command("flake-check-dag.py", "verify", "--plan", plan,
-                "--graph", graph, "--evidence", build)
+        try:
+            command("flake-check-dag.py", "verify", "--plan", plan,
+                    "--graph", graph, "--evidence", build)
+        except subprocess.CalledProcessError:
+            # Verification failure is a CI failure, but not a reason to hide
+            # independently runnable tests from the same exact-head plan.
+            build_failed = True
+            print("Build evidence verification failed; probing runtime artifacts",
+                  file=sys.stderr)
 
     runtime_failed = False
     if names:
