@@ -79,6 +79,18 @@ class RemoteBuildersTest(unittest.TestCase):
                            "c": {"HostName": "other", "TailscaleIPs": []}}}
         self.assertEqual(remote.peers(status), {"fc-123-1-n2-w1": "100.77.3.8"})
 
+    def test_peer_ip_validation_rejects_non_tailnet_or_malformed_addresses(self):
+        name = remote.worker_name(34, 1, 1, 1)
+        for bad in (None, 5, "100.1.2.3", "100.128.0.1",
+                    "100.999.2.3", "100.64.01.2",
+                    "8.8.8.8", "fd7a:115c:a1e0::1"):
+            with self.subTest(bad=bad):
+                self.assertEqual(remote.peers({"Peer": {"a": {
+                    "HostName": name, "TailscaleIPs": [bad]}}}), {})
+        self.assertEqual(remote.peers({"Peer": {"a": {
+            "HostName": name, "TailscaleIPs": [None, "8.8.8.8", "100.127.255.255"]
+        }}}), {name: "100.127.255.255"})
+
     def test_tailnet_peer_table_can_be_null_while_initializing(self):
         self.assertEqual(remote.peers({"Peer": None}), {})
         self.assertEqual(remote.peers({"Peer": []}), {})

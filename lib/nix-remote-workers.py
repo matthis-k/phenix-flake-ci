@@ -5,15 +5,16 @@ This is transport/provisioning only. Nix remains the single derivation scheduler
 Worker names are isolated by workflow run, attempt and pool size.
 """
 import argparse
+import ipaddress
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 import time
 
 SYSTEMS = {"x86_64-linux", "aarch64-linux"}
+TAILNET_V4 = ipaddress.IPv4Network("100.64.0.0/10")
 COMPLETION = "/tmp/phenix-flake-ci-finished"
 STARTED = "/tmp/phenix-flake-ci-started"
 # GitHub's non-interactive SSH shells do not source /etc/profile.d/nix.sh.
@@ -61,6 +62,15 @@ def hostname(args):
     print(f"hostname={worker_name(args.run_id, args.attempt, args.count, args.index)}")
 
 
+def tailnet_ipv4(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        return ipaddress.IPv4Address(value) in TAILNET_V4
+    except ipaddress.AddressValueError:
+        return False
+
+
 def peers(status):
     result = {}
     # Tailscale can report "Peer": null immediately after a successful
@@ -75,7 +85,7 @@ def peers(status):
         name = peer.get("HostName")
         ips = peer.get("TailscaleIPs")
         if isinstance(name, str) and isinstance(ips, list):
-            ipv4 = next((ip for ip in ips if re.fullmatch(r"100\.\d{1,3}\.\d{1,3}\.\d{1,3}", ip)), None)
+            ipv4 = next((ip for ip in ips if tailnet_ipv4(ip)), None)
             if ipv4:
                 result[name] = ipv4
     return result
