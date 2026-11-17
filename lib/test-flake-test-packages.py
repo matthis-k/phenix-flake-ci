@@ -97,6 +97,10 @@ class TestPackageTests(unittest.TestCase):
             self.assertNotIn(forbidden, test)
         self.assertIn("needs: [plan, shared, leaf, join, test]", gate)
         self.assertIn("flake-test-packages.py verify", gate)
+        self.assertLess(gate.index("flake-test-packages.py verify"),
+                        gate.index("Summarize upstream jobs and enforce final acceptance"))
+        self.assertIn("id: verify_runtime", gate)
+        self.assertIn("if: ${{ !cancelled() }}", gate)
 
     def test_workflow_requires_same_run_handoff_before_execution(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/flake-nix-builders.yml").read_text()

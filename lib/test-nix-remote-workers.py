@@ -404,6 +404,12 @@ class RemoteBuildersTest(unittest.TestCase):
         self.assertNotIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", test_stage)
         self.assertIn("needs: [plan, worker, coordinator, test]", acceptance)
         self.assertIn("flake-test-packages.py verify", acceptance)
+        self.assertIn("id: verify_dag", acceptance)
+        self.assertIn("id: verify_runtime", acceptance)
+        self.assertLess(acceptance.index("flake-check-dag.py verify"),
+                        acceptance.index("Summarize upstream jobs and enforce final acceptance"))
+        self.assertLess(acceptance.index("flake-test-packages.py verify"),
+                        acceptance.index("Summarize upstream jobs and enforce final acceptance"))
         self.assertIn("test \"$TESTS\" = success", acceptance)
         self.assertIn("test \"$TESTS\" = skipped", acceptance)
 

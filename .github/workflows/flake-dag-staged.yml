@@ -339,24 +339,6 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Require complete build and expected test outcomes
-        env:
-          PLAN: ${{ needs.plan.result }}
-          SHARED: ${{ needs.shared.result }}
-          LEAF: ${{ needs.leaf.result }}
-          JOIN: ${{ needs.join.result }}
-          TESTS: ${{ needs.test.result }}
-          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
-        run: |
-          test "$PLAN" = success
-          test "$SHARED" = success
-          test "$LEAF" = success
-          test "$JOIN" = success
-          if [ "$TEST_COUNT" = 0 ]; then
-            test "$TESTS" = skipped
-          else
-            test "$TESTS" = success
-          fi
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: matthis-k/phenix-flake-ci
@@ -364,15 +346,56 @@ jobs:
           path: .ci-tools/flake-ci
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ !cancelled() }}
         with:
           name: nix-dag-plan
           path: ci-plan/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: needs.plan.outputs.test_count != '0'
+        if: ${{ !cancelled() && needs.plan.outputs.test_count != '0' }}
         with:
           pattern: dag-runnable-test-*
           path: dag-runnable-evidence/
       - name: Verify all discovered test packages have complete exact-head evidence
+        id: verify_runtime
+        if: ${{ !cancelled() }}
         run: |
           python3 .ci-tools/flake-ci/lib/flake-test-packages.py verify \
             --plan ci-plan/test-packages.json --results dag-runnable-evidence/
+      - name: Summarize upstream jobs and enforce final acceptance
+        if: ${{ !cancelled() }}
+        env:
+          PLAN: ${{ needs.plan.result }}
+          SHARED: ${{ needs.shared.result }}
+          LEAF: ${{ needs.leaf.result }}
+          JOIN: ${{ needs.join.result }}
+          TESTS: ${{ needs.test.result }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
+          DAG_VERDICT: ${{ steps.verify_dag.outcome }}
+          RUNTIME_VERDICT: ${{ steps.verify_runtime.outcome }}
+        run: |
+          failed=0
+          test "$PLAN" = success || failed=1
+          test "$SHARED" = success || failed=1
+          test "$LEAF" = success || failed=1
+          test "$JOIN" = success || failed=1
+          if [ "$TEST_COUNT" = 0 ]; then
+            test "$TESTS" = skipped || failed=1
+          else
+            test "$TESTS" = success || failed=1
+          fi
+          test "$RUNTIME_VERDICT" = success || failed=1
+          {
+            echo "### Exact-head CI acceptance"
+            echo "| Required stage | Outcome |"
+            echo "| --- | --- |"
+            echo "| plan | $PLAN |"
+            echo "| shared | $SHARED |"
+            echo "| leaf | $LEAF |"
+            echo "| join | $JOIN |"
+            echo "| tests | $TESTS |"
+            echo "| runtime evidence | $RUNTIME_VERDICT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Required CI jobs or exact-head evidence checks did not all pass"
+            exit 1
+          fi
