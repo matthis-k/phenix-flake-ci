@@ -63,6 +63,24 @@ jobs:
             exit 1
           fi
 
+      - name: Build a literal dotted-plus check with the shared check formatter
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          import subprocess
+
+          spec = importlib.util.spec_from_file_location(
+              "flake_check_plan", Path("lib/flake-check-plan.py"))
+          planner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(planner)
+          name = "api.integration+literal"
+          subprocess.run(
+              ["nix", "build", "--no-write-lock-file", "--no-link",
+               planner.check_target("x86_64-linux", name)],
+              cwd="tests/declarative-test-consumer", check=True)
+          PY
+
       - name: Verify prebuilt process scenario runs without tester-side compilation
         run: |
           set -euo pipefail
@@ -359,7 +377,13 @@ jobs:
           )
           results="$(find "$RUNNER_TEMP/local-flake-ci" -mindepth 1 -maxdepth 1 -type d -print -quit)"
           test -n "$results"
-          jq -e '.checks | length == 8' "$results/evidence.json" >/dev/null
+          # Compare against the frozen discovered inventory, not a brittle
+          # hand-maintained check count. Also prove the literal-name fixture
+          # survives through the full local DAG and evidence pipeline.
+          jq -e --slurpfile plan "$results/plan.json" \
+            '((.checks | keys) == ($plan[0].checks | keys)) and
+             (.checks | has("api.integration+literal"))' \
+            "$results/evidence.json" >/dev/null
           for name in rpc rpc-repeat; do
             jq -e '.status == "pass"' "$results/runtime-results/$name/evidence.json" >/dev/null
           done

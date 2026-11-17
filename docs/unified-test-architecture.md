@@ -217,6 +217,13 @@ other cases, and the final acceptance gate rejects missing, repeated, stale,
 or failed case evidence. The existing single-case `run` command remains
 available for jobs requiring independent runner isolation, not as a legacy shim.
 
+## Literal check names across Nix backends
+
+Check inventory names are literal attributes under `checks.<system>`, not
+fragments of an attribute path. Every generic Nix backend uses the same
+quoted installable formatter so names like `api.integration+literal` resolve
+to one derivation, just like already quoted `test.*` runtime packages.
+
 ## Staged DAG failure recovery
 
 On a successful untrusted staged DAG join, no recovery job is scheduled. If

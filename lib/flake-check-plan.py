@@ -57,6 +57,20 @@ def hint_for(name, hints):
     return result
 
 
+def check_target(system, name):
+    """Build a literal, fully qualified flake check installable.
+
+    A check name such as "api.integration+literal" must be one attribute,
+    not a nested attribute path or a partly parsed Nix expression. The plan
+    already allows these characters; quote every name consistently.
+    """
+    if not isinstance(system, str) or not re.fullmatch(r"[a-z0-9_-]+", system):
+        raise ValueError("invalid Nix check system")
+    if not isinstance(name, str) or not CHECK.fullmatch(name):
+        raise ValueError("invalid Nix check name")
+    return f'.#checks.{system}."{name}"'
+
+
 def cache_prefix(config):
     cache = config.get("cache", {})
     if not isinstance(cache, dict):
@@ -214,7 +228,7 @@ def build_command(args):
         # otherwise independent builds and multiplied evaluation overhead.
         # --json reports realized outputs bound to exact evaluated drv paths;
         # reuse the same strict parser as the full-DAG backend.
-        targets = [f".#checks.{plan['system']}.{name}" for name in shard["checks"]]
+        targets = [check_target(plan["system"], name) for name in shard["checks"]]
         raw = subprocess.check_output(
             ["nix", "build", "--keep-going", "--no-link", "--json", "-L", *targets], text=True,
         )

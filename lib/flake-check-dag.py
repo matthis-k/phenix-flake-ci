@@ -251,7 +251,7 @@ def build_command(args):
     if commit != plan["commit"]:
         raise ValueError("DAG builder checkout does not match plan commit")
     checks = plan["checks"]
-    targets = [f".#checks.{plan['system']}.{name}" for name in sorted(checks)]
+    targets = [planner.check_target(plan["system"], name) for name in sorted(checks)]
     build_roots = set(checks.values())
     test_plan = None
     if getattr(args, "test_packages", None):

@@ -98,7 +98,7 @@ def build_selected(plan, names, *, test_plan=None, test_root=None):
     if len(names) != len(set(names)) or not set(names) <= set(plan["checks"]):
         raise ValueError("duplicate or undeclared selected check")
     subset = {name: plan["checks"][name] for name in sorted(names)}
-    targets = [f".#checks.{plan['system']}.{name}" for name in sorted(names)]
+    targets = [planner.check_target(plan["system"], name) for name in sorted(names)]
     derivations = set(subset.values())
     if test_plan is not None:
         packages.validate(test_plan)

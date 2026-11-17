@@ -250,8 +250,8 @@ class DagTests(unittest.TestCase):
                 dag.build_command(args)
             runner.assert_called_once_with(
                 ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
-                 ".#checks.x86_64-linux.a", ".#checks.x86_64-linux.b",
-                 ".#checks.x86_64-linux.shipping"], text=True)
+                 '.#checks.x86_64-linux."a"', '.#checks.x86_64-linux."b"',
+                 '.#checks.x86_64-linux."shipping"'], text=True)
             proof = type("Args", (), {"plan": args.plan, "graph": args.graph,
                                       "evidence": args.output})
             dag.verify_command(proof)
@@ -294,8 +294,8 @@ class DagTests(unittest.TestCase):
                 dag.build_command(args)
             build.assert_called_once_with(
                 ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
-                 ".#checks.x86_64-linux.a", ".#checks.x86_64-linux.b",
-                 ".#checks.x86_64-linux.shipping",
+                 '.#checks.x86_64-linux."a"', '.#checks.x86_64-linux."b"',
+                 '.#checks.x86_64-linux."shipping"',
                  '.#packages.x86_64-linux."test.rpc"'], text=True)
             pinned.assert_called_once_with(
                 ["nix", "build", "--offline", "--no-substitute", "--max-jobs", "0",
@@ -347,7 +347,7 @@ class DagTests(unittest.TestCase):
             invocation = build.call_args.args[0]
             self.assertIn("--keep-going", invocation)
             for name in plan["checks"]:
-                self.assertIn(f".#checks.{plan['system']}.{name}", invocation)
+                self.assertIn(dag.planner.check_target(plan["system"], name), invocation)
             self.assertIn('.#packages.x86_64-linux."test.rpc"', invocation)
             self.assertFalse(args.output.exists())
 
