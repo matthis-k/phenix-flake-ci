@@ -302,6 +302,16 @@ inspection limit. Oversized files produce an explicit failed assertion rather
 than being read into unbounded memory. `size` and `exists` predicates remain
 available for arbitrarily large artifacts.
 
+### Runtime timing evidence
+
+Every executed runtime test package adds an optional `durationSeconds` field to
+its existing `evidence.json` record. The final verifier reports the five slowest
+measured cases and the sum of measured case durations. These are **test
+execution times**, not Nix build durations or end-to-end CI wall time; batches
+may execute in parallel across runners. Blocked cases have no execution
+duration. The field is diagnostic-only and does not weaken exact-head checks or
+require older test evidence producers to supply timing data.
+
 ## Configuring test batches
 
 The default planning budget produces up to 32 runtime jobs, targeting at

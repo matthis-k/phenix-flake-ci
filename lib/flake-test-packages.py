@@ -9,12 +9,14 @@ Each case retains separate evidence; no CI-specific domain semantics.
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+import time
 
 from test_services import OutputLimitExceeded, run_isolated
 
@@ -301,6 +303,7 @@ def execute_case(plan, name, path, timeout_seconds=DEFAULT_CASE_TIMEOUT_SECONDS)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     runtime_report = runtime_dir / "result.json"
     runtime_report.unlink(missing_ok=True)
+    started = time.monotonic()
     try:
         # The executable may be a generic package rather than mkTest's own
         # runner. Give every case fresh cwd and user cache/config state so
@@ -349,6 +352,7 @@ def execute_case(plan, name, path, timeout_seconds=DEFAULT_CASE_TIMEOUT_SECONDS)
             except (ValueError, OSError) as error:
                 result["runtimeError"] = f"cannot read runtime test report: {error}"
                 result["status"] = "failed"
+        result["durationSeconds"] = round(max(0.0, time.monotonic() - started), 3)
         save(path, result)
     print(f"PASS: runnable test package {name}")
 
@@ -454,6 +458,7 @@ def verify_command(args):
     paths = sorted(Path(args.results).rglob("evidence.json"))
     seen = set()
     passing = []
+    timings = []
     problems = []
     if len(paths) != len(expected):
         problems.append(f"expected {len(expected)} test results, found {len(paths)}")
@@ -479,6 +484,13 @@ def verify_command(args):
         }.items()):
             problems.append(f"failed, stale or forged test-package evidence: {name}")
             continue
+        # Timing is diagnostic-only, never part of exact-head acceptance.
+        # Older artifact producers and malformed optional timings cannot turn
+        # a passing test red or an invalid test green.
+        duration = value.get("durationSeconds")
+        if (type(duration) in (int, float) and math.isfinite(duration)
+                and duration >= 0):
+            timings.append((name, float(duration)))
         status = value.get("status")
         if status == "pass":
             passing.append(name)
@@ -498,6 +510,14 @@ def verify_command(args):
                         + (f" (+{len(missing) - 16} more)" if len(missing) > 16 else ""))
     print(f"Runtime evidence: {len(passing)}/{len(expected)} passing, "
           f"{len(problems)} diagnostics")
+    if timings:
+        # Sum is per-case execution time, not CI wall time: test batches may
+        # run simultaneously across GitHub runners.
+        slowest = sorted(timings, key=lambda item: (-item[1], item[0]))[:5]
+        summary = ", ".join(f"{name}={seconds:.3f}s" for name, seconds in slowest)
+        print(f"Runtime case timings ({len(timings)}/{len(expected)} measured; "
+              f"sum {sum(seconds for _, seconds in timings):.3f}s; "
+              f"slowest {summary})")
     if problems:
         # Report multiple independent failures in one run without allowing
         # arbitrarily large logs from a corrupted or hostile artifact set.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Behavioral proof of generic test package discovery and strict evidence."""
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
@@ -709,6 +711,37 @@ else:
                     "plan": root / "plan.json", "results": root})())
             self.assertIn("unreadable test-package evidence", str(raised.exception))
             self.assertIn("failed test package beta", str(raised.exception))
+
+    def test_per_case_timing_is_measured_without_becoming_a_gate(self):
+        plan = test_plan(alpha=test_item("alpha"))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            evidence = root / "alpha" / "evidence.json"
+            subject.save(root / "plan.json", plan)
+            with mock.patch.object(
+                    subject.time, "monotonic", side_effect=[15.0, 18.125]), \
+                 mock.patch.object(subject, "run_isolated", return_value=
+                                   subprocess.CompletedProcess(["test-alpha"], 0, "", "")):
+                subject.execute_case(plan, "alpha", evidence)
+            record = subject.load(evidence)
+            self.assertEqual(record["status"], "pass")
+            self.assertEqual(record["durationSeconds"], 3.125)
+            args = type("Args", (), {
+                "plan": root / "plan.json", "results": root})()
+            with redirect_stdout(io.StringIO()) as output:
+                subject.verify_command(args)
+            self.assertIn("alpha=3.125s", output.getvalue())
+            self.assertIn("1/1 measured", output.getvalue())
+            # Optional timing metadata cannot override the exact-head status.
+            subject.save(evidence, {**record, "durationSeconds": "untrusted"})
+            with redirect_stdout(io.StringIO()) as output:
+                subject.verify_command(args)
+            self.assertNotIn("case timings", output.getvalue())
+            subject.save(evidence, {**record, "durationSeconds": -99.0})
+            subject.verify_command(args)
+            subject.save(evidence, {**record, "status": "failed"})
+            with self.assertRaisesRegex(ValueError, "failed test package alpha"):
+                subject.verify_command(args)
 
     def test_verify_full_exact_head_set_and_fail_closed(self):
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
