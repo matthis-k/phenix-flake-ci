@@ -452,26 +452,60 @@ def verify_command(args):
     plan = validate(load(args.plan))
     expected = set(plan["tests"])
     paths = sorted(Path(args.results).rglob("evidence.json"))
-    if len(paths) != len(expected):
-        raise ValueError(f"expected {len(expected)} test results, found {len(paths)}")
     seen = set()
+    passing = []
+    problems = []
+    if len(paths) != len(expected):
+        problems.append(f"expected {len(expected)} test results, found {len(paths)}")
     for path in paths:
-        value = load(path)
+        try:
+            value = load(path)
+        except (OSError, ValueError, UnicodeError) as error:
+            problems.append(f"unreadable test-package evidence at {path}: {error}")
+            continue
+        if not isinstance(value, dict):
+            problems.append(f"invalid test-package evidence object at {path}")
+            continue
         name = value.get("name")
-        if name not in expected or name in seen:
-            raise ValueError("unknown or repeated test package evidence")
+        if not isinstance(name, str) or name not in expected or name in seen:
+            problems.append(f"unknown or repeated test package evidence: {name!r}")
+            continue
         seen.add(name)
         item = plan["tests"][name]
         if any(value.get(key) != expected_value for key, expected_value in {
             "schemaVersion": SCHEMA, "digest": plan["digest"],
-            "commit": plan["commit"], "name": name, "status": "pass",
+            "commit": plan["commit"], "name": name,
             "drv": item["drv"], "out": item["out"], "exe": item["exe"],
         }.items()):
-            raise ValueError("failed, stale or forged test-package evidence")
-    if seen != expected:
-        raise ValueError("incomplete runnable test package evidence")
+            problems.append(f"failed, stale or forged test-package evidence: {name}")
+            continue
+        status = value.get("status")
+        if status == "pass":
+            passing.append(name)
+        elif status in ("failed", "blocked"):
+            reason = value.get("reason")
+            # Keep diagnostics bounded, single-line, and independent of any
+            # untrusted test output. Artifacts retain the full original record.
+            detail = (" ".join(reason.split())[:240]
+                      if isinstance(reason, str) else "")
+            problems.append(f"{status} test package {name}: {detail}")
+        else:
+            problems.append(f"invalid test-package status for {name}: {status!r}")
+    missing = sorted(expected - seen)
+    if missing:
+        problems.append("incomplete runnable test package evidence: missing "
+                        + ", ".join(missing[:16])
+                        + (f" (+{len(missing) - 16} more)" if len(missing) > 16 else ""))
+    print(f"Runtime evidence: {len(passing)}/{len(expected)} passing, "
+          f"{len(problems)} diagnostics")
+    if problems:
+        # Report multiple independent failures in one run without allowing
+        # arbitrarily large logs from a corrupted or hostile artifact set.
+        display = problems[:32]
+        raise ValueError("\n".join(display)
+                         + (f"\n(+{len(problems) - 32} additional diagnostics)"
+                            if len(problems) > 32 else ""))
     print(f"PASS: {len(expected)} independently executed runnable test packages")
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

@@ -603,6 +603,61 @@ else:
             self.assertIn(".mainProgram", args[-2])
             self.assertIn("/bin/", args[-2])
 
+    def test_verify_reports_all_independent_failures_and_preserves_successes(self):
+        plan = test_plan(**{name: test_item(name) for name in (
+            "alpha", "beta", "gamma", "delta", "epsilon")})
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = root / "plan.json"
+            subject.save(manifest, plan)
+
+            def evidence(name, status="pass", reason=None):
+                record = {"schemaVersion": subject.SCHEMA, "digest": plan["digest"],
+                          "commit": C, "name": name, **plan["tests"][name],
+                          "status": status}
+                if reason is not None:
+                    record["reason"] = reason
+                return record
+
+            subject.save(root / "alpha" / "evidence.json",
+                         evidence("alpha", "failed", "compiler error on one test"))
+            subject.save(root / "beta" / "evidence.json",
+                         evidence("beta", "blocked", "missing output"))
+            subject.save(root / "gamma" / "evidence.json", evidence("gamma"))
+            subject.save(root / "epsilon" / "evidence.json",
+                         {**evidence("epsilon"), "commit": "f" * 40})
+            subject.save(root / "unexpected" / "evidence.json",
+                         {**evidence("gamma"), "name": "unexpected"})
+            args = type("Args", (), {"plan": manifest, "results": root})()
+            with self.assertRaises(ValueError) as raised:
+                subject.verify_command(args)
+            report = str(raised.exception)
+            for name in ("alpha", "beta", "delta", "epsilon", "unexpected"):
+                self.assertIn(name, report)
+            self.assertIn("failed test package alpha", report)
+            self.assertIn("blocked test package beta", report)
+            self.assertIn("incomplete runnable test package evidence", report)
+            self.assertIn("failed, stale or forged", report)
+            self.assertNotIn("failed test package gamma", report)
+
+    def test_verify_corrupt_evidence_does_not_hide_other_failures(self):
+        plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subject.save(root / "plan.json", plan)
+            damaged = root / "alpha" / "evidence.json"
+            damaged.parent.mkdir()
+            damaged.write_text("{broken json")
+            subject.save(root / "beta" / "evidence.json", {
+                "schemaVersion": subject.SCHEMA, "digest": plan["digest"],
+                "commit": C, "name": "beta", **plan["tests"]["beta"],
+                "status": "failed", "reason": "independent assertion"})
+            with self.assertRaises(ValueError) as raised:
+                subject.verify_command(type("Args", (), {
+                    "plan": root / "plan.json", "results": root})())
+            self.assertIn("unreadable test-package evidence", str(raised.exception))
+            self.assertIn("failed test package beta", str(raised.exception))
+
     def test_verify_full_exact_head_set_and_fail_closed(self):
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
         with tempfile.TemporaryDirectory() as folder:
