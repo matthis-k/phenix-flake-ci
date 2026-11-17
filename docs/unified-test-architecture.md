@@ -228,8 +228,12 @@ independent checks. Where runtime packages were successfully realized, the
 fallback exports just those packages and runs the existing artifact-only test
 batches. Missing packages are recorded as blocked; the final acceptance job
 still fails on the original broken join, regardless of fallback success.
-The fallback can repeat some work from failed leaf jobs; it incurs no additional
-compilation on the successful path.
+Before the failed-only fallback build, completed leaf archives from the same
+GitHub run are imported when their exact-head shard evidence and offline Nix
+outputs validate. Missing, stale or invalid leaf artifacts are skipped one
+by one, without preventing independent roots from being retried. This can
+avoid recompilation of successful leaf outputs. It incurs no additional
+compilation or artifact transfer on the successful path.
 
 ## Per-case workspace discipline
 

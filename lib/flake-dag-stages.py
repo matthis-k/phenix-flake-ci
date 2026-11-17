@@ -194,6 +194,84 @@ def verify_leaf(plan, stages, item):
                 or not all(planner.STORE.fullmatch(x) for x in check["outputs"])):
             raise ValueError(f"invalid leaf result {name}")
 
+def import_leaf_archive(path):
+    """Import one already-built Nix leaf delta without rebuilding."""
+    archive = path.with_name("store.nar")
+    if archive.is_symlink() or not archive.is_file():
+        raise ValueError(f"missing or symlinked store transfer: {archive}")
+    size = archive.stat().st_size
+    if size:
+        with archive.open("rb") as source:
+            subprocess.run(["nix-store", "--import"], stdin=source, check=True,
+                           stdout=subprocess.DEVNULL)
+    return size
+
+
+def recover_leaves_command(args):
+    """Best-effort reuse of successful exact-head shards during failed CI."""
+    plan, _, stages = validated(args)
+    ensure_commit(plan)
+    root = Path(args.leaves)
+    roles = {shard["id"] for shard in stages["shards"]}
+    grouped = {role: [] for role in roles}
+    for path in sorted(root.rglob("evidence.json")):
+        relative = path.relative_to(root).parts
+        # GitHub artifact identity must match the planned shard.
+        if len(relative) == 2 and relative[0].startswith("dag-leaf-"):
+            role = relative[0].removeprefix("dag-leaf-")
+            if role in grouped:
+                grouped[role].append(path)
+    reused, skipped = [], []
+    transferred = 0
+    for role in sorted(roles):
+        proofs = grouped[role]
+        if len(proofs) != 1:
+            skipped.append(role)
+            print(f"SKIP: {role} has {len(proofs)} candidate leaf proofs")
+            continue
+        path = proofs[0]
+        try:
+            if path.is_symlink():
+                raise ValueError("symlink leaf evidence")
+            item = load(path)
+            if item.get("role") != role:
+                raise ValueError("leaf role differs from artifact identity")
+            verify_leaf(plan, stages, item)
+            exported = item.get("exportedPaths")
+            if (not isinstance(exported, list)
+                    or any(not isinstance(p, str) or not planner.STORE.fullmatch(p)
+                           for p in exported)
+                    or len(set(exported)) != len(exported)):
+                raise ValueError("invalid exported store paths")
+            archive = path.with_name("store.nar")
+            if archive.is_symlink() or not archive.is_file():
+                raise ValueError("missing or symlinked Nix archive")
+            if bool(archive.stat().st_size) != bool(exported):
+                raise ValueError("archive and exported paths disagree")
+            size = import_leaf_archive(path)
+            expected = sorted({p for check in item["checks"].values()
+                               for p in check["outputs"]})
+            actual = planner.run_command(
+                ["nix", "path-info", "--offline", *expected]).splitlines()
+            if set(actual) != set(expected):
+                raise ValueError("leaf outputs absent after import")
+            transferred += size
+            reused.append(role)
+            print(f"REUSED: {role} ({len(expected)} outputs, {size} archive bytes)")
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError,
+                subprocess.CalledProcessError) as error:
+            skipped.append(role)
+            print(f"SKIP: {role} invalid or incomplete leaf: {error}")
+    result = {"schemaVersion": SCHEMA, "commit": plan["commit"],
+              "planDigest": plan["digest"], "stageDigest": stages["digest"],
+              "reusedShards": reused, "skippedShards": skipped,
+              "importedArchiveBytes": transferred}
+    if getattr(args, "output", None):
+        save(args.output, result)
+    print(f"Recovered {len(reused)}/{len(roles)} complete shards; "
+          f"remaining roots go to Nix keep-going")
+
+
 def join_command(args):
     plan, graph, stages = validated(args)
     ensure_commit(plan)
@@ -215,13 +293,7 @@ def join_command(args):
         if item["role"] in seen:
             raise ValueError("duplicate shard in join")
         seen.add(item["role"])
-        archive = path.with_name("store.nar")
-        if not archive.is_file():
-            raise ValueError(f"missing store transfer from {item['role']}")
-        if archive.stat().st_size:
-            with archive.open("rb") as source:
-                subprocess.run(["nix-store", "--import"], stdin=source, check=True,
-                               stdout=subprocess.DEVNULL)
+        import_leaf_archive(path)
         results.update(item["checks"])
     for item in results.values():
         # Fail rather than rebuilding any dependency already built by a leaf.
@@ -272,7 +344,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
     for key, func in [("plan", plan_command), ("leaf", leaf_command),
-                      ("join", join_command), ("verify", verify_command)]:
+                      ("join", join_command), ("recover-leaves", recover_leaves_command),
+                      ("verify", verify_command)]:
         sub = subs.add_parser(key)
         sub.set_defaults(func=func)
         sub.add_argument("--plan", required=True)
@@ -290,6 +363,9 @@ def main():
             sub.add_argument("--test-packages")
             sub.add_argument("--test-root")
             sub.add_argument("--output", required=True)
+        elif key == "recover-leaves":
+            sub.add_argument("--leaves", required=True)
+            sub.add_argument("--output")
         else:
             sub.add_argument("--evidence", required=True)
             sub.add_argument("--test-packages")
