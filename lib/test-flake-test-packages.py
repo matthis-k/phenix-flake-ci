@@ -62,7 +62,7 @@ class TestPackageTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/flake-dag-staged.yml").read_text()
         plan = workflow.split("  plan:\n", 1)[1].split("  shared:\n", 1)[0]
-        join = workflow.split("  join:\n", 1)[1].split("  test:\n", 1)[0]
+        join = workflow.split("  join:\n", 1)[1].split("  recovery:\n", 1)[0]
         test = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
         gate = workflow.split("  acceptance:\n", 1)[1]
         self.assertIn("flake-test-packages.py plan", plan)
@@ -80,7 +80,7 @@ class TestPackageTests(unittest.TestCase):
                         join.index("flake-test-packages.py export"))
         self.assertIn("name: nix-dag-test-closure", join)
         self.assertIn("compression-level: 1", join)
-        self.assertIn("needs: [plan, join]", test)
+        self.assertIn("needs: [plan, join, recovery]", test)
         self.assertIn("--closure dag-test-closure/closure.nar", test)
         self.assertIn("ci-plan/runtime-runner.py batch", test)
         self.assertIn("cp .ci-tools/flake-ci/lib/flake-test-packages.py ci-plan/runtime-runner.py", plan)
@@ -97,12 +97,45 @@ class TestPackageTests(unittest.TestCase):
         self.assertNotIn("nix build", test)
         for forbidden in ("TS_OAUTH", "id-token: write", "secrets: inherit"):
             self.assertNotIn(forbidden, test)
-        self.assertIn("needs: [plan, shared, leaf, join, test]", gate)
+        self.assertIn("needs: [plan, shared, leaf, join, recovery, test]", gate)
         self.assertIn("flake-test-packages.py verify", gate)
         self.assertLess(gate.index("flake-test-packages.py verify"),
                         gate.index("Summarize upstream jobs and enforce final acceptance"))
         self.assertIn("id: verify_runtime", gate)
         self.assertIn("if: ${{ !cancelled() }}", gate)
+
+    def test_failed_join_recovers_independent_runtime_without_green_path_rebuild(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/flake-dag-staged.yml").read_text()
+        recovery = workflow.split("  recovery:\n", 1)[1].split("  test:\n", 1)[0]
+        tests = workflow.split("  test:\n", 1)[1].split("  acceptance:\n", 1)[0]
+        gate = workflow.split("  acceptance:\n", 1)[1]
+        # Recovery does not compile anything if the normal join succeeded.
+        self.assertIn("needs.join.result != 'success'", recovery)
+        self.assertIn("needs.plan.result == 'success'", recovery)
+        self.assertIn("needs.plan.outputs.test_count != '0'", recovery)
+        self.assertIn("--plan ci-plan/test-packages.json", recovery)
+        self.assertIn("flake-test-packages.py build", recovery)
+        self.assertIn("continue-on-error: true", recovery)
+        self.assertIn("flake-test-packages.py probe", recovery)
+        self.assertIn("flake-test-packages.py export", recovery)
+        self.assertIn("--available dag-test-closure/available.json", recovery)
+        self.assertIn("runtime_ready: ${{ steps.ready.outputs.ready }}", recovery)
+        self.assertIn("save: false", recovery)
+        self.assertNotIn("id-token: write", recovery)
+        # The test runners import exactly one of the two verified archives.
+        self.assertIn("needs: [plan, join, recovery]", tests)
+        self.assertIn("needs.recovery.outputs.runtime_ready == 'true'", tests)
+        self.assertIn("needs.join.result == 'success'", tests)
+        self.assertIn("name: nix-dag-test-closure", tests)
+        self.assertIn("name: nix-dag-recovery-test-closure", tests)
+        self.assertIn('available=(--available dag-test-closure/available.json)', tests)
+        self.assertNotIn("flake-test-packages.py build", tests)
+        self.assertNotIn("actions/checkout@", tests)
+        self.assertIn("needs: [plan, shared, leaf, join, recovery, test]", gate)
+        self.assertIn('test "$JOIN" = success || failed=1', gate)
+        self.assertIn('test "$RECOVERY" = skipped || failed=1', gate)
+        self.assertIn("flake-test-packages.py verify", gate)
 
     def test_workflow_requires_same_run_handoff_before_execution(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/flake-nix-builders.yml").read_text()
@@ -289,7 +322,7 @@ class TestPackageTests(unittest.TestCase):
              ("PLAN", "WORKERS", "COORDINATOR", "TESTS", "TEST_COUNT",
               "DAG_VERDICT", "RUNTIME_VERDICT")),
             ("flake-dag-staged.yml",
-             ("PLAN", "SHARED", "LEAF", "JOIN", "TESTS", "TEST_COUNT",
+             ("PLAN", "SHARED", "LEAF", "JOIN", "RECOVERY", "TESTS", "TEST_COUNT",
               "RUNTIME_VERDICT")),
         ):
             with self.subTest(workflow=workflow_name):
@@ -304,12 +337,17 @@ class TestPackageTests(unittest.TestCase):
                 script = textwrap.dedent(entry.split("        run: |\n", 1)[1])
                 defaults = {key: "success" for key in stages}
                 defaults.update(TEST_COUNT="2")
+                if "RECOVERY" in stages:
+                    # The normal successful join skips recovery entirely.
+                    defaults["RECOVERY"] = "skipped"
                 with tempfile.TemporaryDirectory() as folder:
                     summary = Path(folder) / "summary.md"
                     for overrides, expected_code in (
                         ({}, 0),
                         ({"COORDINATOR": "failure"}, 1),
                         ({"JOIN": "failure"}, 1),
+                        ({"JOIN": "failure", "RECOVERY": "success"}, 1),
+                        ({"RECOVERY": "success"}, 1),
                         ({"RUNTIME_VERDICT": "failure"}, 1),
                         ({"TESTS": "failure"}, 1),
                         ({"TEST_COUNT": "0", "TESTS": "skipped"}, 0),

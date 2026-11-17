@@ -290,10 +290,88 @@ jobs:
           path: dag-final/evidence.json
           if-no-files-found: error
 
+  recovery:
+    name: Recover independent runtime packages after failed DAG join
+    needs: [plan, join]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.join.result != 'success' && needs.plan.outputs.test_count != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      runtime_ready: ${{ steps.ready.outputs.ready }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: matthis-k/phenix-flake-ci
+          ref: ${{ inputs.library_ref }}
+          path: .ci-tools/flake-ci
+          persist-credentials: false
+      - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nix-dag-plan
+          path: ci-plan/
+      # This is only activated after a failed/skipped join. Reuse the
+      # existing read-only PR cache; do not rebuild twice on green runs.
+      - name: Restore exact-head shared cache read-only
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: ${{ needs.plan.outputs.cache_prefix }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ needs.plan.outputs.cache_prefix }}-
+          save: false
+      - name: Attempt every independent test package build
+        id: build
+        continue-on-error: true
+        run: |
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py build \
+            --plan ci-plan/test-packages.json \
+            --root "${RUNNER_TEMP}/phenix-dag-recovery-roots"
+      - name: Probe and export independently successful package outputs
+        id: ready
+        if: ${{ !cancelled() }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_COUNT: ${{ needs.plan.outputs.test_count }}
+        run: |
+          set -euo pipefail
+          python3 .ci-tools/flake-ci/lib/flake-test-packages.py probe \
+            --plan ci-plan/test-packages.json \
+            --output dag-test-closure/available.json
+          ready_count="$(jq -er '.available | length' dag-test-closure/available.json)"
+          if [[ "$BUILD_OUTCOME" == success && "$ready_count" -ne "$TEST_COUNT" ]]; then
+            echo "::error::Recovery build omitted declared runtime packages"
+            exit 1
+          fi
+          if [[ "$ready_count" -gt 0 ]]; then
+            python3 .ci-tools/flake-ci/lib/flake-test-packages.py export \
+              --plan ci-plan/test-packages.json \
+              --available dag-test-closure/available.json \
+              --output dag-test-closure/closure.nar
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() && steps.ready.outputs.ready == 'true' }}
+        with:
+          name: nix-dag-recovery-test-closure
+          path: dag-test-closure/
+          if-no-files-found: error
+          compression-level: 1
+
   test:
     name: Runtime test batch ${{ matrix.id }}
-    needs: [plan, join]
-    if: needs.join.result == 'success' && needs.plan.outputs.test_count != '0'
+    needs: [plan, join, recovery]
+    # The join is the preferred green path. Only the red path can recover
+    # independently built tests, without claiming the DAG itself succeeded.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.join.result == 'success' || needs.recovery.outputs.runtime_ready == 'true') && needs.plan.outputs.test_count != '0' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -312,8 +390,14 @@ jobs:
           name: nix-dag-plan
           path: ci-plan/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ needs.join.result == 'success' }}
         with:
           name: nix-dag-test-closure
+          path: dag-test-closure/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ needs.recovery.outputs.runtime_ready == 'true' }}
+        with:
+          name: nix-dag-recovery-test-closure
           path: dag-test-closure/
       - name: Import prebuilt closure once and run the assigned batch
         env:
@@ -321,10 +405,14 @@ jobs:
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CASE_TIMEOUT: ${{ inputs.test_timeout_seconds }}
         run: |
+          available=()
+          if [[ -f dag-test-closure/available.json ]]; then
+            available=(--available dag-test-closure/available.json)
+          fi
           python3 ci-plan/runtime-runner.py batch \
             --plan ci-plan/test-packages.json --names-json "$BATCH_NAMES" \
             --expected-commit "$EXPECTED_COMMIT" --timeout-seconds "$CASE_TIMEOUT" \
-            --closure dag-test-closure/closure.nar \
+            --closure dag-test-closure/closure.nar "${available[@]}" \
             --results dag-test-result/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -335,7 +423,7 @@ jobs:
 
   acceptance:
     name: Require complete Nix DAG and runnable test evidence
-    needs: [plan, shared, leaf, join, test]
+    needs: [plan, shared, leaf, join, recovery, test]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -368,6 +456,7 @@ jobs:
           SHARED: ${{ needs.shared.result }}
           LEAF: ${{ needs.leaf.result }}
           JOIN: ${{ needs.join.result }}
+          RECOVERY: ${{ needs.recovery.result }}
           TESTS: ${{ needs.test.result }}
           TEST_COUNT: ${{ needs.plan.outputs.test_count }}
           RUNTIME_VERDICT: ${{ steps.verify_runtime.outcome }}
@@ -377,6 +466,9 @@ jobs:
           test "$SHARED" = success || failed=1
           test "$LEAF" = success || failed=1
           test "$JOIN" = success || failed=1
+          if [ "$JOIN" = success ]; then
+            test "$RECOVERY" = skipped || failed=1
+          fi
           if [ "$TEST_COUNT" = 0 ]; then
             test "$TESTS" = skipped || failed=1
           else
@@ -391,6 +483,7 @@ jobs:
             echo "| shared | $SHARED |"
             echo "| leaf | $LEAF |"
             echo "| join | $JOIN |"
+            echo "| recovery | $RECOVERY |"
             echo "| tests | $TESTS |"
             echo "| runtime evidence | $RUNTIME_VERDICT |"
           } >> "$GITHUB_STEP_SUMMARY"
