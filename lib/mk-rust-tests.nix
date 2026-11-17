@@ -50,13 +50,6 @@ let
       inherit pkgs src lockFile name;
       cargoArgs = args;
     };
-  mkRunner = name: compiled: compiledName:
-    pkgs.writeShellApplication {
-      name = "rust-test-${name}";
-      text = ''
-        exec ${compiled}/bin/${compiledName} --package ${lib.escapeShellArg name} "$@"
-      '';
-    };
   isolated =
     builtins.listToAttrs (map (name: {
       name = "test.rust-${name}";
@@ -66,15 +59,20 @@ let
     }) selected);
   shared =
     let
-      compiledName = "rust-test-shared";
-      compiled = mkCompiled compiledName (
-        lib.concatMap (name: [ "--package" name ]) selected
-        ++ [ "--all-targets" ] ++ cargoArgs
-      );
+      # The existing workspace adapter already owns per-crate wrappers.
+      # Its explicit package list avoids unnecessary workspace parsing.
+      existing = import ./mk-cargo-test-packages.nix {
+        inherit pkgs src lockFile;
+        packages = selected;
+        compiledName = "rust-test-shared";
+        cargoArgs =
+          lib.concatMap (name: [ "--package" name ]) selected
+          ++ [ "--all-targets" ] ++ cargoArgs;
+      };
     in
     builtins.listToAttrs (map (name: {
       name = "test.rust-${name}";
-      value = mkRunner name compiled compiledName;
+      value = existing."test.cargo-${name}";
     }) selected);
   # The preexisting workspace helper owns member discovery and shared corpus
   # creation. Merely project its existing packages into the unified naming.
