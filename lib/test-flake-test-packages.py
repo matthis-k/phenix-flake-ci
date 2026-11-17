@@ -743,11 +743,57 @@ else:
             with self.assertRaisesRegex(ValueError, "failed test package alpha"):
                 subject.verify_command(args)
 
+    def test_evidence_must_be_under_its_planned_case_directory(self):
+        plan = test_plan(alpha=test_item("alpha"))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subject.save(root / "plan.json", plan)
+            record = {"schemaVersion": subject.SCHEMA, "digest": plan["digest"],
+                      "commit": C, "name": "alpha", **plan["tests"]["alpha"],
+                      "status": "pass"}
+            wrong = root / "other" / "evidence.json"
+            subject.save(wrong, record)
+            args = type("Args", (), {"plan": root / "plan.json", "results": root})()
+            with self.assertRaises(ValueError) as raised:
+                subject.verify_command(args)
+            self.assertIn("misplaced test-package evidence", str(raised.exception))
+            self.assertIn("missing alpha", str(raised.exception))
+            wrong.unlink()
+            canonical = root / "alpha" / "evidence.json"
+            subject.save(canonical, record)
+            subject.verify_command(args)
+            canonical.unlink()
+            canonical.symlink_to(wrong)
+            with self.assertRaisesRegex(ValueError, "symlink test-package evidence"):
+                subject.verify_command(args)
+
+    def test_evidence_summary_counts_distinct_failures_and_missing(self):
+        plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"),
+                         gamma=test_item("gamma"), delta=test_item("delta"))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subject.save(root / "plan.json", plan)
+            def write(name, status):
+                subject.save(root / name / "evidence.json", {
+                    "schemaVersion": subject.SCHEMA, "digest": plan["digest"],
+                    "commit": C, "name": name, **plan["tests"][name],
+                    "status": status, "reason": "test explanation"})
+            write("alpha", "pass")
+            write("beta", "failed")
+            write("gamma", "blocked")
+            args = type("Args", (), {"plan": root / "plan.json", "results": root})()
+            with redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(ValueError):
+                    subject.verify_command(args)
+            self.assertIn(
+                "Runtime evidence: 1/4 passing; 1 failed; 1 blocked; 1 missing; 0 invalid",
+                output.getvalue())
+
     def test_verify_full_exact_head_set_and_fail_closed(self):
         plan = test_plan(alpha=test_item("alpha"), beta=test_item("beta"))
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            a, b = root/"a"/"evidence.json", root/"b"/"evidence.json"
+            a, b = root/"alpha"/"evidence.json", root/"beta"/"evidence.json"
             a.parent.mkdir()
             b.parent.mkdir()
             def evidence(name):

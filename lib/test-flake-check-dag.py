@@ -108,6 +108,28 @@ class DagTests(unittest.TestCase):
         self.assertEqual(report["checkDependencies"]["end"], ["middle", "start"])
         self.assertEqual(report["criticalCheckDepth"], 2)
 
+    def test_deep_named_check_waves_group_in_stable_order(self):
+        # Many named checks in separate waves formerly rescanned the entire
+        # named-check inventory once per wave. Cover both depth and ordering.
+        size = 512
+        paths = [f"/nix/store/{index + 1:032x}-chain-{index}.drv"
+                 for index in range(size)]
+        names = [f"check-{index:04d}" for index in range(size)]
+        checks = dict(zip(reversed(names), reversed(paths)))
+        graph = {
+            path: {"inputDrvs": {paths[index - 1]: ["out"]} if index else {}}
+            for index, path in enumerate(paths)
+        }
+        plan = dag.planner.make_plan(
+            checks, {"schemaVersion": 1, "system": "x86_64-linux",
+                     "shardCount": 3}, SHA)
+        report = dag.graph_summary(plan, graph)
+        self.assertEqual(report["criticalCheckDepth"], size - 1)
+        self.assertEqual(report["checkWaves"],
+                         [[name] for name in names])
+        self.assertEqual(report["checkDependencies"][names[-1]],
+                         names[:-1])
+
     def test_wide_fan_in_and_named_derivation_aliases(self):
         # Many unrelated leaves should not balloon into transitive set copies.
         leaves = [f"/nix/store/{index + 100:032x}-leaf-{index}.drv"
