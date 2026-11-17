@@ -113,7 +113,9 @@ class TestPackageTests(unittest.TestCase):
         # Recovery does not compile anything if the normal join succeeded.
         self.assertIn("needs.join.result != 'success'", recovery)
         self.assertIn("needs.plan.result == 'success'", recovery)
-        self.assertNotIn("needs.plan.outputs.test_count != '0' }}", recovery)
+        # A check-only flake must enter recovery; only the runtime probe waits
+        # for a nonempty executable test inventory.
+        self.assertNotIn("needs.plan.outputs.test_count", recovery.split("    steps:", 1)[0])
         self.assertIn("if: ${{ !cancelled() && needs.plan.outputs.test_count != '0' }}", recovery)
         self.assertIn("flake-check-dag.py build", recovery)
         self.assertIn("--plan ci-plan/plan.json", recovery)
