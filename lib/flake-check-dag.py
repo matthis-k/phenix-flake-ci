@@ -134,10 +134,12 @@ def graph_summary(plan, raw):
     # not reachable through a named check. No silent partial graph acceptance.
     if len(reachable) != len(parents):
         raise ValueError("cyclic Nix derivation graph")
-    tiers = [
-        sorted(name for name in names if waves[name] == rank)
-        for rank in range(max(waves.values()) + 1)
-    ]
+    # Build every tier in one pass. Scanning all named checks once per
+    # dependency level makes a deep check graph quadratic in its depth.
+    # 'names' is sorted already, preserving the previous stable tier order.
+    tiers = [[] for _ in range(max(waves.values()) + 1)]
+    for name in names:
+        tiers[waves[name]].append(name)
     return {
         "schemaVersion": SCHEMA,
         "planDigest": plan["digest"],

@@ -460,20 +460,37 @@ def verify_command(args):
     passing = []
     timings = []
     problems = []
+    invalid = 0
+    failed = 0
+    blocked = 0
     if len(paths) != len(expected):
         problems.append(f"expected {len(expected)} test results, found {len(paths)}")
     for path in paths:
+        if path.is_symlink():
+            invalid += 1
+            problems.append(f"symlink test-package evidence is not accepted: {path}")
+            continue
         try:
             value = load(path)
         except (OSError, ValueError, UnicodeError) as error:
+            invalid += 1
             problems.append(f"unreadable test-package evidence at {path}: {error}")
             continue
         if not isinstance(value, dict):
+            invalid += 1
             problems.append(f"invalid test-package evidence object at {path}")
             continue
         name = value.get("name")
         if not isinstance(name, str) or name not in expected or name in seen:
+            invalid += 1
             problems.append(f"unknown or repeated test package evidence: {name!r}")
+            continue
+        # The executor always writes each case to <case>/evidence.json.
+        # An unrelated artifact cannot fill a missing case merely by using
+        # the same plan digest and name in its JSON contents.
+        if path.parent.name != name:
+            invalid += 1
+            problems.append(f"misplaced test-package evidence for {name}: {path}")
             continue
         seen.add(name)
         item = plan["tests"][name]
@@ -482,6 +499,7 @@ def verify_command(args):
             "commit": plan["commit"], "name": name,
             "drv": item["drv"], "out": item["out"], "exe": item["exe"],
         }.items()):
+            invalid += 1
             problems.append(f"failed, stale or forged test-package evidence: {name}")
             continue
         # Timing is diagnostic-only, never part of exact-head acceptance.
@@ -495,6 +513,10 @@ def verify_command(args):
         if status == "pass":
             passing.append(name)
         elif status in ("failed", "blocked"):
+            if status == "failed":
+                failed += 1
+            else:
+                blocked += 1
             reason = value.get("reason")
             # Keep diagnostics bounded, single-line, and independent of any
             # untrusted test output. Artifacts retain the full original record.
@@ -502,14 +524,16 @@ def verify_command(args):
                       if isinstance(reason, str) else "")
             problems.append(f"{status} test package {name}: {detail}")
         else:
+            invalid += 1
             problems.append(f"invalid test-package status for {name}: {status!r}")
     missing = sorted(expected - seen)
     if missing:
         problems.append("incomplete runnable test package evidence: missing "
                         + ", ".join(missing[:16])
                         + (f" (+{len(missing) - 16} more)" if len(missing) > 16 else ""))
-    print(f"Runtime evidence: {len(passing)}/{len(expected)} passing, "
-          f"{len(problems)} diagnostics")
+    print(f"Runtime evidence: {len(passing)}/{len(expected)} passing; "
+          f"{failed} failed; {blocked} blocked; "
+          f"{len(missing)} missing; {invalid} invalid")
     if timings:
         # Sum is per-case execution time, not CI wall time: test batches may
         # run simultaneously across GitHub runners.
