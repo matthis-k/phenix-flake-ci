@@ -199,7 +199,7 @@ class TestPackageTests(unittest.TestCase):
                 for n in ("alpha", "beta", "gamma")], ["pass", "blocked", "pass"])
             self.assertIn("required runtime output", subject.load(
                 root / "results/beta/evidence.json")["reason"])
-            with self.assertRaisesRegex(ValueError, "failed, stale"):
+            with self.assertRaisesRegex(ValueError, "blocked test package beta"):
                 subject.verify_command(type("Args", (), {
                     "plan": manifest, "results": root / "results"})())
 
@@ -253,7 +253,7 @@ class TestPackageTests(unittest.TestCase):
                 subject.load(root / "results" / name / "evidence.json")["status"]
                 for name in ("alpha", "beta", "gamma")],
                 ["pass", "blocked", "pass"])
-            with self.assertRaisesRegex(ValueError, "failed, stale"):
+            with self.assertRaisesRegex(ValueError, "blocked test package beta"):
                 subject.verify_command(type("Args", (), {
                     "plan": manifest, "results": root / "results",
                 })())
