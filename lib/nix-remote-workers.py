@@ -103,8 +103,22 @@ def discover(args):
     ready = {}
     discovered = {}
     last_errors = {}
+    last_status_error = None
     while time.monotonic() < end and len(ready) < count:
-        status = json.loads(invoke("tailscale", "status", "--json").stdout)
+        try:
+            status = json.loads(invoke("tailscale", "status", "--json").stdout)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                json.JSONDecodeError) as error:
+            # The daemon may still be starting after tailscale up succeeds.
+            # Stay within the existing discovery deadline, without accepting
+            # unauthenticated builders or terminating healthy worker jobs.
+            reason = f"{type(error).__name__}: {error}"[:400]
+            if reason != last_status_error:
+                print(f"Tailscale peer inventory not ready: {reason}", flush=True)
+                last_status_error = reason
+            time.sleep(4)
+            continue
+        last_status_error = None
         present = peers(status)
         candidates = {name: present[name] for name in names if name in present}
         discovered.update(candidates)

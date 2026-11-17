@@ -118,6 +118,68 @@ class RemoteBuildersTest(unittest.TestCase):
             self.assertIn("ssh-ng://runner@100.66.1.2", Path(args.machines).read_text())
             self.assertEqual(json.loads(Path(args.hosts).read_text()), {expected: "100.66.1.2"})
 
+    def test_discovery_retries_transient_tailnet_status_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {
+                "count": 1, "system": "x86_64-linux", "slots": 2,
+                "run_id": 333, "attempt": 1, "timeout": 20,
+                "machines": str(Path(directory, "machines")),
+                "hosts": str(Path(directory, "hosts.json")),
+            })()
+            name = remote.worker_name(333, 1, 1, 1)
+            replies = iter([
+                subprocess.CalledProcessError(1, ["tailscale", "status", "--json"]),
+                subprocess.TimeoutExpired(["tailscale", "status", "--json"], 15),
+                "{not json",
+                json.dumps({"Peer": {"a": {
+                    "HostName": name, "TailscaleIPs": ["100.90.1.7"]}}}),
+            ])
+
+            def invoke(*cmd, **kwargs):
+                if cmd[:2] == ("tailscale", "status"):
+                    value = next(replies)
+                    if isinstance(value, Exception):
+                        raise value
+                    return type("Reply", (), {"stdout": value})()
+                if cmd[:2] == ("sudo", "ssh"):
+                    self.assertEqual(cmd[-2:], ("touch", remote.STARTED))
+                else:
+                    self.assertEqual(cmd[:3], ("sudo", remote.LOCAL_NIX, "store"))
+                return type("Reply", (), {"stdout": ""})()
+
+            with mock.patch.object(remote, "invoke", side_effect=invoke), \
+                 mock.patch.object(remote, "ssh_config"), \
+                 mock.patch.object(remote.time, "sleep") as sleep:
+                remote.discover(args)
+            self.assertEqual(sleep.call_count, 3)
+            self.assertEqual(json.loads(Path(args.hosts).read_text()),
+                             {name: "100.90.1.7"})
+            self.assertIn("ssh-ng://runner@100.90.1.7",
+                          Path(args.machines).read_text())
+
+    def test_persistent_tailnet_status_failure_respects_discovery_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {
+                "count": 1, "system": "x86_64-linux", "slots": 2,
+                "run_id": 333, "attempt": 1, "timeout": 1,
+                "machines": str(Path(directory, "machines")),
+                "hosts": str(Path(directory, "hosts.json")),
+            })()
+            command = ["tailscale", "status", "--json"]
+            with mock.patch.object(
+                    remote, "invoke",
+                    side_effect=subprocess.CalledProcessError(1, command)), \
+                 mock.patch.object(remote.time, "monotonic",
+                                   side_effect=[0, 0, 2]), \
+                 mock.patch.object(remote.time, "sleep") as sleep, \
+                 redirect_stdout(io.StringIO()) as output:
+                with self.assertRaisesRegex(RuntimeError, "0 of 1 authenticated"):
+                    remote.discover(args)
+            sleep.assert_called_once_with(4)
+            self.assertEqual(output.getvalue().count(
+                "Tailscale peer inventory not ready"), 1)
+            self.assertFalse(Path(args.machines).exists())
+
     def test_cleanup_releases_workers_after_missing_discovery_file(self):
         with tempfile.TemporaryDirectory() as directory:
             names = [remote.worker_name(234, 1, 2, i) for i in (1, 2)]
