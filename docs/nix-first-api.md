@@ -6,6 +6,9 @@
 
 ```nix
 let
+  # Existing consumer outputs; use your own regular apps/packages here.
+  existingApps = { };
+  existingPackages = { };
   ci = phenix-flake-ci.lib.mkFlakeCI {
     inherit pkgs;
     config = import ./ci/flake-check-config.nix;
