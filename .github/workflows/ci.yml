@@ -371,8 +371,9 @@ jobs:
             git config user.email fixture-ci@localhost
             git add .
             git commit -qm 'freeze consumer fixture'
-            python3 ../../lib/flake-ci-local.py \
-              --config ci/flake-check-config.nix \
+            # Exercise the public Nix-generated app, which delegates to the
+            # unchanged exact-head planner and runtime runner.
+            nix run --no-write-lock-file .#ci -- \
               --output-dir "$RUNNER_TEMP/local-flake-ci"
           )
           results="$(find "$RUNNER_TEMP/local-flake-ci" -mindepth 1 -maxdepth 1 -type d -print -quit)"
