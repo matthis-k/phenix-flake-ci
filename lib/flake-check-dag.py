@@ -83,13 +83,14 @@ def graph_summary(plan, raw):
 
     checks = plan["checks"]
     names = sorted(checks)
-    bits = {name: 1 << index for index, name in enumerate(names)}
     checks_at_drv = {}
     named_bits = {}
-    for name in names:
+    for index, name in enumerate(names):
         drv = checks[name]
         checks_at_drv.setdefault(drv, []).append(name)
-        named_bits[drv] = named_bits.get(drv, 0) | bits[name]
+        # Construct bits once per root; retaining a mask for every name makes
+        # the allocation quadratic even when all checks are independent.
+        named_bits[drv] = named_bits.get(drv, 0) | (1 << index)
 
     consumers = {drv: [] for drv in parents}
     pending = {drv: len(dependencies) for drv, dependencies in parents.items()}
@@ -109,7 +110,14 @@ def graph_summary(plan, raw):
         for dependency in parents[drv]:
             inherited |= reachable[dependency]
         if drv in checks_at_drv:
-            upstream = [name for name in names if inherited & bits[name]]
+            # Enumerate only the reachable named checks. Scanning every
+            # check here makes a wide graph of independent roots O(C^2).
+            upstream = []
+            remaining = inherited
+            while remaining:
+                bit = remaining & -remaining
+                upstream.append(names[bit.bit_length() - 1])
+                remaining ^= bit
             rank = max((waves[name] + 1 for name in upstream), default=0)
             # Two named checks can refer to one derivation; neither depends on
             # the other, yet both inherit the same actual upstream checks.

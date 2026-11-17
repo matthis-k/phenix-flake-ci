@@ -127,6 +127,30 @@ class DagTests(unittest.TestCase):
         self.assertEqual(report["checkDependencies"]["output"], ["alias", "core"])
         self.assertEqual(report["checkWaves"], [["alias", "core"], ["output"]])
 
+    def test_thousands_of_independent_check_roots_do_not_need_full_scan(self):
+        # Width, not only depth, must scale. Independent checks have an
+        # empty ancestor mask; only the join should decode two upstream bits.
+        count = 4096
+        paths = [f"/nix/store/{index + 1:032x}-wide-{index}.drv"
+                 for index in range(count)]
+        names = [f"check-{index:04d}" for index in range(count)]
+        checks = dict(zip(names, paths))
+        join = drv("f", "wide-join")
+        checks["join"] = join
+        graph = {path: {"inputDrvs": {}} for path in paths}
+        graph[join] = {"inputDrvs": {
+            paths[1]: ["out"], paths[-2]: ["out"]}}
+        plan = dag.planner.make_plan(
+            checks, {"schemaVersion": 1, "system": "x86_64-linux",
+                     "shardCount": 3}, SHA)
+        report = dag.graph_summary(plan, graph)
+        self.assertEqual(report["derivationCount"], count + 1)
+        self.assertEqual(report["checkDependencies"]["join"],
+                         [names[1], names[-2]])
+        self.assertEqual(report["checkWaves"], [sorted(names), ["join"]])
+        self.assertTrue(all(report["checkDependencies"][name] == []
+                            for name in names))
+
     def test_disconnected_cyclic_derivations_fail_closed(self):
         # Validate the *entire* recursive graph, not just paths reached from
         # check roots. Unexpected cyclic records must never be hidden.
