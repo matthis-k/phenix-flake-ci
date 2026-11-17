@@ -63,6 +63,24 @@ jobs:
             exit 1
           fi
 
+      - name: Build a literal dotted-plus check with the shared check formatter
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          import subprocess
+
+          spec = importlib.util.spec_from_file_location(
+              "flake_check_plan", Path("lib/flake-check-plan.py"))
+          planner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(planner)
+          name = "api.integration+literal"
+          subprocess.run(
+              ["nix", "build", "--no-write-lock-file", "--no-link",
+               planner.check_target("x86_64-linux", name)],
+              cwd="tests/declarative-test-consumer", check=True)
+          PY
+
       - name: Verify prebuilt process scenario runs without tester-side compilation
         run: |
           set -euo pipefail

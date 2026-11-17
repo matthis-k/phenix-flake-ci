@@ -72,7 +72,7 @@ class StagedDagTests(unittest.TestCase):
         self.assertEqual(set(realized), set(selected))
         nix.assert_called_once_with(
             ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
-             ".#checks.x86_64-linux.model", ".#checks.x86_64-linux.tools"],
+             '.#checks.x86_64-linux."model"', '.#checks.x86_64-linux."tools"'],
             text=True)
 
     def test_join_compiles_final_checks_and_runtime_packages_in_one_graph(self):
@@ -96,7 +96,7 @@ class StagedDagTests(unittest.TestCase):
             self.assertEqual(set(result), {"integration"})
             built.assert_called_once_with(
                 ["nix", "build", "--keep-going", "--no-link", "--json", "-L",
-                 ".#checks.x86_64-linux.integration",
+                 '.#checks.x86_64-linux."integration"',
                  '.#packages.x86_64-linux."test.rpc"'],
                 text=True)
             pinned.assert_called_once()

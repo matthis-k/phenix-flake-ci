@@ -91,6 +91,9 @@
     in
     {
       checks.${system} = {
+        # The check name is deliberately a literal attribute containing both
+        # a dot and a plus. Every CI backend must address this one attribute.
+        "api.integration+literal" = pkgs.writeText "ci-literal-check" "pass\\n";
         cli = ciLib.mkTest {
           inherit pkgs;
           name = "cli-contract";

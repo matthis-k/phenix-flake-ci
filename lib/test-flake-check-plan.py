@@ -160,6 +160,23 @@ class TestFlakeChecks(unittest.TestCase):
                 planner.verify_command(args)
 
 
+    def test_literal_check_target_does_not_split_special_name(self):
+        for name in ("cli", "expected-failure", "api.integration+literal",
+                     "with_underscores", "123"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    planner.check_target("x86_64-linux", name),
+                    '.#checks.x86_64-linux."' + name + '"')
+        for invalid in ("", "a/b", 'a"b', "name with space", "../escape"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "name"):
+                planner.check_target("x86_64-linux", invalid)
+        for invalid in ("", "x86_64-linux;rm", "x86_64-linux/evil"):
+            with self.subTest(system=invalid), self.assertRaisesRegex(ValueError, "system"):
+                planner.check_target(invalid, "cli")
+        plan = planner.make_plan(
+            checks("cli", "api.integration+literal"), CONFIG, SHA)
+        self.assertIn("api.integration+literal", plan["checks"])
+
     def test_shard_runs_as_one_concurrent_nix_graph_and_preserves_exact_evidence(self):
         plan = planner.make_plan(checks("a", "b", "c", "d"), CONFIG, SHA)
         shard = next(s for s in plan["shards"] if len(s["checks"]) > 1)
@@ -178,7 +195,7 @@ class TestFlakeChecks(unittest.TestCase):
                  mock.patch.object(planner.subprocess, "check_output",
                                    return_value=json.dumps(entries)) as build:
                 planner.build_command(args)
-            expected = [".#checks.x86_64-linux." + name for name in shard["checks"]]
+            expected = [planner.check_target("x86_64-linux", name) for name in shard["checks"]]
             build.assert_called_once_with(
                 ["nix", "build", "--keep-going", "--no-link", "--json", "-L", *expected],
                 text=True)
