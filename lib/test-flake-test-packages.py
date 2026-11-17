@@ -199,6 +199,61 @@ class TestPackageTests(unittest.TestCase):
                 subject.verify_command(type("Args", (), {
                     "plan": manifest, "results": root / "results"})())
 
+    def test_missing_output_after_probe_blocks_only_affected_case(self):
+        # A package can disappear after the coordinator captures availability.
+        plan = test_plan(**{name: test_item(name)
+                            for name in ("alpha", "beta", "gamma")})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "plan.json"
+            available = root / "available.json"
+            subject.save(manifest, plan)
+            subject.save(available, subject.availability_plan(
+                plan, ["alpha", "beta", "gamma"]))
+            args = type("Args", (), {
+                "plan": manifest, "local": True, "available": available,
+                "closure": None, "expected_commit": None,
+                "names_json": '["alpha","beta","gamma"]',
+                "results": root / "results",
+            })()
+            queried = []
+            executed = []
+
+            def query(argv, **kwargs):
+                self.assertEqual(argv[:3], ["nix", "path-info", "--offline"])
+                roots = argv[3:]
+                queried.append(roots)
+                if plan["tests"]["beta"]["out"] in roots:
+                    raise subprocess.CalledProcessError(1, argv)
+                return "\n".join(roots) + "\n"
+
+            def execute(argv, **kwargs):
+                executed.append(argv[0])
+                runtime = Path(kwargs["env"]["PHENIX_TEST_OUTPUT"])
+                runtime.mkdir(parents=True, exist_ok=True)
+                (runtime / "result.json").write_text('{"status":"pass"}')
+                return subprocess.CompletedProcess(argv, 0, "", "")
+
+            with mock.patch.object(subject, "verify_head"), mock.patch.object(
+                    subject.subprocess, "check_output", side_effect=query), mock.patch.object(
+                    subject, "run_isolated", side_effect=execute):
+                with self.assertRaisesRegex(ValueError, "1 of 3 test packages failed"):
+                    subject.batch_command(args)
+            self.assertEqual(queried, [
+                [plan["tests"][name]["out"] for name in ("alpha", "beta", "gamma")],
+                *[[plan["tests"][name]["out"]] for name in ("alpha", "beta", "gamma")],
+            ])
+            self.assertEqual(executed, [
+                plan["tests"]["alpha"]["exe"], plan["tests"]["gamma"]["exe"]])
+            self.assertEqual([
+                subject.load(root / "results" / name / "evidence.json")["status"]
+                for name in ("alpha", "beta", "gamma")],
+                ["pass", "blocked", "pass"])
+            with self.assertRaisesRegex(ValueError, "failed, stale"):
+                subject.verify_command(type("Args", (), {
+                    "plan": manifest, "results": root / "results",
+                })())
+
     def test_runtime_partial_workflow_never_weakens_final_evidence(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/flake-nix-builders.yml").read_text()
