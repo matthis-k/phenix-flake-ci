@@ -12,6 +12,7 @@ let
   testAssert = import ./test-assert.nix;
   mkTestCases = import ./mk-test-cases.nix;
   mkCargoTestPackages = import ./mk-cargo-test-packages.nix;
+  mkRustTests = import ./mk-rust-tests.nix;
   mkCargoDependencyChecks = import ./mk-cargo-dependency-checks.nix;
   rustCheckStrategy = import ./rust-check-strategy.nix;
   renderMaintenance = import ./render-maintenance-with-cache.nix;
@@ -110,7 +111,7 @@ let
 in
 {
   version = "0.14.0";
-  tests = (import ./tests.nix) // (import ./test-api-tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix) // (import ./flake-ci-workflows-tests.nix) // (import ./flake-ci-facade-tests.nix);
+  tests = (import ./tests.nix) // (import ./test-api-tests.nix) // (import ./nix-cache-tests.nix) // (import ./flake-ci-workflow-tests.nix) // (import ./flake-ci-workflows-tests.nix) // (import ./flake-ci-facade-tests.nix) // (import ./rust-test-generator-tests.nix);
   inherit
     ciSchemaVersion
     maintenanceCommandGraph
@@ -126,6 +127,7 @@ in
     mkFlakeCI
     mkCargoTestPackage
     mkCargoTestPackages
+    mkRustTests
     mkCargoDependencyChecks
     rustCheckStrategy
     mkMaintenance
