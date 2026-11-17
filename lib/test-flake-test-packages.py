@@ -293,13 +293,13 @@ class TestPackageTests(unittest.TestCase):
             with self.subTest(workflow=workflow_name):
                 workflow = (Path(__file__).resolve().parents[1] /
                             ".github/workflows" / workflow_name).read_text()
-                acceptance = workflow.split("  acceptance:\\n", 1)[1]
+                acceptance = workflow.split("  acceptance:\n", 1)[1]
                 self.assertLess(
                     acceptance.index("flake-test-packages.py verify"),
                     acceptance.index("Summarize upstream jobs and enforce final acceptance"))
                 entry = acceptance.split(
-                    "      - name: Summarize upstream jobs and enforce final acceptance\\n", 1)[1]
-                script = textwrap.dedent(entry.split("        run: |\\n", 1)[1])
+                    "      - name: Summarize upstream jobs and enforce final acceptance\n", 1)[1]
+                script = textwrap.dedent(entry.split("        run: |\n", 1)[1])
                 defaults = {key: "success" for key in stages}
                 defaults.update(TEST_COUNT="2")
                 with tempfile.TemporaryDirectory() as folder:
