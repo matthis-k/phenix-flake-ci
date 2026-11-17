@@ -18,6 +18,13 @@
         inherit pkgs;
         src = ./.;
         lockFile = ./Cargo.lock;
-      };
+      } // (phenix-flake-ci.lib.mkRustTests {
+        inherit pkgs;
+        src = ./.;
+        lockFile = ./Cargo.lock;
+        # Cargo discovers unit, integration, bin and example test targets.
+        # The generated package runs already-compiled test binaries.
+        crate = "generic-cargo-test-fixture";
+      }).packages;
     };
 }
